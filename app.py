@@ -2,47 +2,43 @@ import streamlit as st
 import segno
 from io import BytesIO
 
-st.set_page_config(page_title="Gerador QR Final", page_icon="📲")
+st.set_page_config(page_title="Gerador QR Oficial", page_icon="🎯")
 
-st.title("🎯 Gerador de QR Code (Link Direto)")
-st.write("Esta versão foi otimizada para o sensor da Xiaomi ler o link sem erros.")
+st.title("🎯 Gerador de Acesso Direto (Sem Propaganda)")
+st.write("Versão otimizada para abertura imediata no Redmi/Xiaomi.")
 
 # Entrada de link
-url_input = st.text_input("Cole o link aqui (ex: seusite.streamlit.app):").strip()
+url_input = st.text_input("Cole o link do seu jogo aqui:").strip()
 
 if url_input:
-    try:
-        # 1. LIMPEZA E FORMATAÇÃO
-        if not url_input.startswith(("http://", "https://")):
-            url_final = f"https://{url_input}"
-        else:
-            url_final = url_input
+    # 1. TRATAMENTO DE URL LIMPA
+    # Forçamos o protocolo correto para o Android não se confundir
+    url_final = url_input if url_input.startswith(("http://", "https://")) else f"https://{url_input}"
 
-        # 2. O SEGREDO: Modo Alfanumérico e Erro Mínimo (L)
-        # Reduzimos o QR Code ao estado mais simples possível.
-        # Isso faz os "quadradinhos" ficarem enormes, facilitando o foco do Redmi.
+    try:
+        # 2. O SEGREDO: QR CODE "Puro" com Micro=False
+        # Usamos o nível de erro 'L' para que o QR Code tenha o MÍNIMO de pontos possível.
+        # Quanto menos pontos, mais rápido o seu Redmi identifica como LINK.
         qr = segno.make_qr(url_final, error='l', boost_error=False)
         
         buf = BytesIO()
-        # Scale 20 e Border 10 para criar contraste máximo e isolar o código de interferências
-        qr.save(buf, kind='png', scale=20, border=10, dark='black', light='white')
+        # Escala 20 e borda larga (10) isolam o código de interferências da tela
+        qr.save(buf, kind='png', scale=20, border=10)
         byte_im = buf.getvalue()
 
-        # 3. EXIBIÇÃO
-        st.success(f"Link validado: {url_final}")
-        
-        # Mostramos o QR Code com largura controlada para não estourar a tela
-        st.image(byte_im, caption="APONTE A CÂMERA E CLIQUE NO ÍCONE DE GLOBO/SITE", width=450)
+        # EXIBIÇÃO
+        st.success(f"Link Direto Configurado: {url_final}")
+        st.image(byte_im, caption="Aponte a câmera e clique em 'Ir para o site'", width=450)
 
         st.download_button(
-            label="📥 Baixar QR Code de Alta Compatibilidade",
+            label="📥 Baixar QR Code Limpo",
             data=byte_im,
-            file_name="qrcode_direto.png",
+            file_name="qrcode_jogo.png",
             mime="image/png"
         )
 
     except Exception as e:
-        st.error("Erro ao gerar o código. Verifique se o link está correto.")
+        st.error("Verifique o link digitado.")
 
 st.divider()
-st.warning("💡 **DICA FINAL PARA REDMI:** Ao ler o código, um ícone flutuante de 'globo' ou 'link' aparecerá. **Você deve tocar nele**. O sistema Xiaomi exige essa confirmação para abrir o navegador.")
+st.info("💡 **DICA:** Se o seu Redmi ainda mostrar 'Copiar Texto', afaste o celular da tela. Como o código agora é muito grande e nítido, a câmera precisa de espaço para reconhecer que é um comando de site.")
