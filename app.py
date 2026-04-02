@@ -1,54 +1,48 @@
 import streamlit as st
 import segno
+import requests
 from io import BytesIO
 
-st.set_page_config(page_title="Gerador QR Final", page_icon="📲")
+st.set_page_config(page_title="Gerador QR Oficial", page_icon="📲")
 
-st.title("🎯 Gerador de Acesso Direto (Versão Blindada)")
-st.write("Esta versão força o sistema Android/MIUI a disparar o navegador imediatamente.")
+st.title("🎯 Gerador de QR Code (Acesso Direto)")
+st.write("Esta versão utiliza encurtamento automático para garantir compatibilidade com Redmi/Xiaomi.")
 
 # Entrada de link
-url_input = st.text_input("Cole o link aqui:", placeholder="ex: seusite.streamlit.app").strip()
+url_input = st.text_input("Cole o link aqui (ex: seusite.streamlit.app):").strip()
 
 if url_input:
-    # 1. TRATAMENTO RIGOROSO DO PROTOCOLO
-    url_limpa = url_input.replace(" ", "").replace("\n", "")
-    if not url_limpa.startswith(("http://", "https://")):
-        url_final = f"https://{url_limpa}"
-    else:
-        url_final = url_input
-
-    # 2. O SEGREDO DEFINITIVO: O formato MEBKM (Mobile Bookmark)
-    # Este formato é uma instrução de sistema que diz ao celular: 
-    # "Isso não é um texto, é um FAVORITO que deve ser ABERTO agora".
-    # É o formato mais agressivo de redirecionamento que existe.
-    data_to_encode = f"MEBKM:TITLE:Abrir Site;URL:{url_final};;"
-
+    # 1. ENCURTAMENTO AUTOMÁTICO (O segredo para o Redmi)
+    # Links .streamlit.app são longos e geram QR Codes que a Xiaomi confunde com texto.
+    # Usamos a API do TinyURL para criar um link curto e 'amigável' para o Android.
     try:
-        # 3. GERAÇÃO DE BAIXA DENSIDADE (MÁXIMO CONTRASTE)
-        # Usamos micro=False e erro 'L' para ter o MENOR número de pontos possível
-        qr = segno.make_qr(data_to_encode, error='l', boost_error=False)
+        api_url = f"http://tinyurl.com{url_input}"
+        response = requests.get(api_url)
+        short_url = response.text
+        
+        st.success(f"Link otimizado para celulares: {short_url}")
+
+        # 2. GERAÇÃO DO QR CODE (BAIXA DENSIDADE)
+        # Com o link curto, o QR Code fica com poucos pontos, facilitando a leitura.
+        qr = segno.make_qr(short_url, error='l')
         
         buf = BytesIO()
-        # Scale 20 e border 10 para o Redmi focar sem erro de leitura de borda
-        qr.save(buf, kind='png', scale=20, border=10, dark='black', light='white')
+        # Scale 20 para quadrados gigantes e nítidos
+        qr.save(buf, kind='png', scale=20, border=4)
         byte_im = buf.getvalue()
 
         # EXIBIÇÃO
-        st.success(f"Comando de Sistema gerado para: {url_final}")
-        
-        # Mostramos o QR Code bem grande na tela
-        st.image(byte_im, caption="Aponte a câmera. O botão 'Abrir site' deve aparecer no centro ou no canto inferior.", width=500)
+        st.image(byte_im, caption="APONTE A CÂMERA E CLIQUE NO BOTÃO 'IR PARA O SITE'", width=450)
 
         st.download_button(
-            label="📥 Baixar QR Code Blindado",
+            label="📥 Baixar QR Code para Impressão",
             data=byte_im,
-            file_name="qrcode_direto_final.png",
+            file_name="qrcode_direto.png",
             mime="image/png"
         )
 
     except Exception as e:
-        st.error(f"Erro técnico: {e}")
+        st.error(f"Erro ao processar o link: {e}")
 
 st.divider()
-st.info("💡 **Dica Final para Xiaomi:** Ao apontar a câmera, o Redmi mostrará um ícone de **Glow ou Globo**. **TOQUE NELE**. A Xiaomi não abre links automaticamente por segurança, ela exige que você confirme no ícone flutuante.")
+st.warning("⚠️ **DICA PARA REDMI NOTE 11:** Ao ler o código, um banner amarelo ou ícone de globo aparecerá na tela da câmera. **Você deve tocar nele**. O sistema Xiaomi não abre sites sem o seu clique de confirmação.")
