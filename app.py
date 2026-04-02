@@ -1,49 +1,52 @@
 import streamlit as st
 import segno
-import pyshorteners
 from io import BytesIO
 
-# Configuração da Página
-st.set_page_config(page_title="Gerador QR Forms Oficial", page_icon="📝")
+# Configuração da Interface
+st.set_page_config(page_title="Gerador QR Universal", page_icon="🌐", layout="centered")
 
-st.title("🎯 Gerador de Acesso Direto para Formulários")
-st.write("Este código encurta links longos (Google/Microsoft Forms) para garantir que o seu Redmi abra o site direto.")
+st.title("🎯 Gerador de QR Code: Link Direto")
+st.write("Cole qualquer link abaixo para gerar um acesso instantâneo via câmera.")
 
-# Entrada do link longo do formulário
-form_url = st.text_input("Cole o link longo do seu formulário aqui:").strip()
+# Entrada de dados (Campo vazio para você colar o que quiser)
+user_input = st.text_input("Cole a URL do site aqui:", placeholder="ex: google.com.br ou seu link do streamlit").strip()
 
-if form_url:
+if user_input:
+    # 1. TRATAMENTO DE URL (O "Pulo do Gato" para Android/Xiaomi)
+    # Remove espaços, quebras de linha e garante o protocolo https://
+    url_limpa = user_input.replace(" ", "").replace("\n", "").replace("\r", "")
+    
+    if not url_limpa.startswith(("http://", "https://")):
+        final_url = f"https://{url_limpa}"
+    else:
+        final_url = url_limpa
+
     try:
-        # 1. O PULO DO GATO: Encurtar o link
-        # Links longos geram QR Codes densos que o Android lê como texto.
-        # Encurtando, o QR Code fica simples e o celular identifica como LINK na hora.
-        s = pyshorteners.Shortener()
-        short_url = s.tinyurl.short(form_url)
+        # 2. GERAÇÃO COM SEGNO (Alta Fidelidade)
+        # Usamos scale=15 para que os blocos sejam grandes o suficiente para o foco do Redmi
+        qr = segno.make_qr(final_url)
         
-        st.info(f"Link encurtado com sucesso: {short_url}")
-
-        # 2. GERAÇÃO DO QR CODE COM SEGNO (PADRÃO ISO)
-        # Usamos scale=20 para os quadrados ficarem gigantes e fáceis de focar
-        qr = segno.make_qr(short_url)
-        
+        # Criamos o buffer para a imagem PNG
         buf = BytesIO()
-        qr.save(buf, kind='png', scale=20, border=4)
+        qr.save(buf, kind='png', scale=15, border=4)
         byte_im = buf.getvalue()
 
-        # 3. EXIBIÇÃO
-        st.success("✅ QR Code pronto! Aponte a câmera para abrir o site.")
-        st.image(byte_im, caption="DICA: No Redmi, clique no ícone de Globo que aparecerá.", width=400)
+        # 3. EXIBIÇÃO NO STREAMLIT
+        st.success(f"✅ Link validado: {final_url}")
+        
+        # Centralizamos a imagem para facilitar o escaneamento direto da tela
+        st.image(byte_im, caption="Aponte a câmera e clique em 'Ir para o site'", width=400)
 
-        # DOWNLOAD
+        # BOTÃO DE DOWNLOAD
         st.download_button(
-            label="📥 Baixar QR Code para Impressão",
+            label="📥 Baixar QR Code (PNG)",
             data=byte_im,
-            file_name="qrcode_forms_direto.png",
+            file_name="qrcode_direto.png",
             mime="image/png"
         )
 
     except Exception as e:
-        st.error(f"Erro ao processar o link. Verifique se a URL está correta. Detalhe: {e}")
+        st.error(f"Ocorreu um erro ao gerar o QR Code: {e}")
 
 st.divider()
-st.warning("⚠️ **POR QUE ISSO FUNCIONA?** Links de formulários são grandes demais para a câmera do Redmi Note 11 processar como link direto. Ao encurtar para um link 'TinyURL', o QR Code fica com poucos blocos, o que força o celular a reconhecer o comando de 'Abrir Navegador' instantaneamente.")
+st.info("💡 **Dica para o seu Redmi:** Sempre que colar um link novo, certifique-se de que ele não tenha espaços no final. O botão 'Ir para o site' aparecerá assim que a câmera focar no código.")
