@@ -1,47 +1,49 @@
 import streamlit as st
 import segno
-import requests
 from io import BytesIO
 
-st.set_page_config(page_title="Gerador QR Infallible", page_icon="📲")
+st.set_page_config(page_title="Gerador QR Oficial", page_icon="🎯")
 
 st.title("🎯 Gerador de QR Code: Link Direto")
-st.write("Esta versão resolve o bloqueio de segurança do seu Redmi usando redirecionamento limpo.")
+st.write("Esta versão foi otimizada para o seu Redmi Note 11 reconhecer o link do jogo.")
 
 # Entrada de link
-url_input = st.text_input("Cole o link do seu jogo aqui:", value="https://streamlit.app").strip()
+url_input = st.text_input("Cole o link do seu jogo aqui:", value="https://jogoforca-5thk4gttejzpjv5sugpyql.streamlit.app/").strip()
 
 if url_input:
-    try:
-        # 1. O PULO DO GATO: Encurtamento via API Silenciosa
-        # Isso remove a "má reputação" do subdomínio longo no sensor da Xiaomi
-        api_url = f"http://tinyurl.com{url_input}"
-        response = requests.get(api_url, timeout=10)
-        short_url = response.text
-        
-        st.success(f"Link otimizado para abertura imediata: {short_url}")
+    # 1. TRATAMENTO DE URL
+    # Garantimos o protocolo correto
+    if not url_input.startswith(("http://", "https://")):
+        url_final = f"https://{url_input}"
+    else:
+        url_final = url_input
 
-        # 2. GERAÇÃO DO QR CODE (BAIXA DENSIDADE)
-        # O link curto gera poucos pontos, o que o Redmi adora ler
-        qr = segno.make_qr(short_url, error='l')
+    try:
+        # 2. GERAÇÃO DE BAIXA DENSIDADE (MÁXIMO CONTRASTE)
+        # Como o link é longo, forçamos o nível de erro 'L' (mínimo)
+        # Isso faz o QR Code ter menos pontos, facilitando a leitura no Redmi
+        qr = segno.make_qr(url_final, error='l', boost_error=False)
         
         buf = BytesIO()
-        # Scale 20 e Border 10 para nitidez máxima
-        qr.save(buf, kind='png', scale=20, border=10)
+        # Scale 25 e Border 10 criam o maior contraste possível para o sensor Xiaomi
+        qr.save(buf, kind='png', scale=25, border=10, dark='black', light='white')
         byte_im = buf.getvalue()
 
         # EXIBIÇÃO
-        st.image(byte_im, caption="APONTE A CÂMERA E CLIQUE NO ÍCONE DE GLOBO/LINK NO CANTO", width=450)
+        st.success(f"Link configurado para o QR Code: {url_final}")
+        
+        # Mostramos o QR Code centralizado e bem nítido
+        st.image(byte_im, caption="APONTE A CÂMERA E CLIQUE NO ÍCONE DE GLOBO/LINK NO CANTO", width=500)
 
         st.download_button(
-            label="📥 Baixar QR Code Blindado",
+            label="📥 Baixar QR Code de Alta Compatibilidade",
             data=byte_im,
-            file_name="qrcode_direto_final.png",
+            file_name="qrcode_jogo_direto.png",
             mime="image/png"
         )
 
     except Exception as e:
-        st.error("Erro ao processar o link. Verifique sua conexão.")
+        st.error(f"Erro ao gerar: Verifique se o link está correto.")
 
 st.divider()
-st.info("💡 **Por que este funciona?** A Xiaomi confia no domínio 'tinyurl.com'. Ao ler este código, o seu Redmi Note 11 mostrará o botão 'Ir para o site' instantaneamente, sem passar por páginas de propaganda.")
+st.info("💡 **DICA FINAL:** Se o seu Redmi ainda der 'Copiar Texto', afaste o celular da tela. O link longo gera muitos pontos; a câmera precisa de distância para focar em todos de uma vez e mostrar o botão 'Ir para o site'.")
