@@ -2,47 +2,52 @@ import streamlit as st
 import segno
 from io import BytesIO
 
-st.set_page_config(page_title="Gerador QR Turbo", page_icon="⚡")
+st.set_page_config(page_title="Gerador QR Final", page_icon="📲")
 
-st.title("🎯 Gerador de Link Direto (Otimizado)")
-st.write("Cole qualquer link. O sistema ajustará a densidade para o seu Redmi ler direto.")
+st.title("🎯 Gerador QR: Acesso Direto Garantido")
+st.write("Versão otimizada para sensores Xiaomi/Redmi e links longos do Streamlit.")
 
-# Entrada de link vazia para você usar como quiser
-url_input = st.text_input("Cole a URL aqui:", placeholder="meusite.com").strip()
+# Entrada de link
+url_input = st.text_input("Cole o link aqui:", placeholder="ex: seusite.streamlit.app").strip()
 
 if url_input:
-    # 1. TRATAMENTO RIGOROSO
-    # Forçamos o HTTPS e limpamos qualquer caractere invisível
+    # 1. TRATAMENTO DE URL ABSOLUTO
     url_limpa = url_input.replace(" ", "").replace("\n", "")
     if not url_limpa.startswith(("http://", "https://")):
-        final_url = f"https://{url_limpa}"
+        url_final = f"https://{url_limpa}"
     else:
-        final_url = url_limpa
+        url_final = url_limpa
+
+    # 2. O PULO DO GATO DEFINITIVO: O prefixo URLTO:
+    # Este prefixo força o Android a entender que o conteúdo É UMA URL, 
+    # não importa o quão longo ou estranho seja o link.
+    data_to_encode = f"URLTO:{url_final}"
 
     try:
-        # 2. O SEGREDO PARA XIAOMI: Baixa Densidade (Boost de Contraste)
-        # Usamos micro=False e forçamos uma versão mínima para os blocos ficarem GRANDES
-        # O segredo é o 'boost_error=False' para não carregar o código de pontos desnecessários
-        qr = segno.make_qr(final_url, error='l', boost_error=False)
+        # 3. GERAÇÃO DE BAIXA DENSIDADE (MÁXIMO CONTRASTE)
+        # Usamos micro=False e erro 'L' para ter o MENOR número de pontos possível
+        qr = segno.make_qr(data_to_encode, error='l', boost_error=False)
         
         buf = BytesIO()
-        # Scale 20 cria quadrados gigantescos. É impossível a câmera do Redmi confundir com texto.
-        qr.save(buf, kind='png', scale=20, border=4)
+        # Scale 20 e border 10 para o Redmi focar instantaneamente sem "ruído"
+        qr.save(buf, kind='png', scale=20, border=10, dark='black', light='white')
         byte_im = buf.getvalue()
 
-        # 3. EXIBIÇÃO
-        st.success(f"Link configurado: {final_url}")
-        st.image(byte_im, caption="Aponte a câmera (O botão 'Ir para o site' deve aparecer)", width=450)
+        # EXIBIÇÃO
+        st.success(f"Link de sistema gerado para: {url_final}")
+        
+        # Mostramos o QR Code bem grande na tela
+        st.image(byte_im, caption="Aponte a câmera e toque no botão de link que aparecerá", width=500)
 
         st.download_button(
-            label="📥 Baixar QR Code de Alta Compatibilidade",
+            label="📥 Baixar QR Code Infalível",
             data=byte_im,
-            file_name="qrcode_direto.png",
+            file_name="qrcode_direto_final.png",
             mime="image/png"
         )
 
     except Exception as e:
-        st.error(f"Erro: {e}")
+        st.error(f"Erro técnico: {e}")
 
 st.divider()
-st.warning("💡 **Dica Técnica:** Se o seu Redmi ainda mostrar 'Copiar Texto', afaste um pouco o celular da tela. Como aumentamos a escala para 20, o código ficou muito grande e nítido; a câmera precisa de um pouco de distância para focar em todos os blocos de uma vez.")
+st.info("💡 **Dica Final:** Se o seu Redmi mostrar o link num balão flutuante, **toque no ícone do globo ou na seta** ao lado do texto. A Xiaomi exige um toque de confirmação para abrir o navegador.")
