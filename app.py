@@ -7,123 +7,115 @@ import re
 # Conexão
 supabase = create_client(st.secrets["URL_SUPABASE"], st.secrets["KEY_SUPABASE"])
 
+def is_paragraph_bold(para):
+    """Verifica se o parágrafo inteiro está em negrito."""
+    if para.style.name.startswith('Heading') or para.style.name.startswith('Título'):
+        return True
+    # Verifica se todos os 'runs' (trechos de texto) do parágrafo são negrito
+    if para.runs:
+        return all(run.bold for run in para.runs if run.text.strip())
+    return False
+
 def process_docx(file):
     doc = Document(file)
     data = []
-    current_n1 = "GERAL"
+    current_n1 = "OUTROS"
     current_n2 = None
     current_text = []
 
     for para in doc.paragraphs:
         text = para.text.strip()
-        
-        # 1. Ignorar linhas vazias ou do sumário (pontinhos)
-        if not text or "...." in text or text.lower() == "sumário":
-            continue
+        if not text or "...." in text: continue
 
-        # 2. Detectar Hinos (Nível 2) - Padrão: "1. Texto" ou "12. Texto"
-        # O regex r'^\d+\.\s' procura por dígitos no início da linha seguidos de ponto e espaço
+        # IDENTIFICAÇÃO DE HINOS (Nível 2) - Padrão "1. " ou "12. "
         if re.match(r'^\d+\.\s', text):
             if current_n2:
                 data.append({"n1": current_n1, "n2": current_n2, "texto": "\n".join(current_text)})
-            
             current_n2 = text
             current_text = []
             continue
 
-        # 3. Detectar Seções (Nível 1) - Padrão: Todo em MAIÚSCULO e sem números no início
-        # Ex: ORANTES, PERDÃO, INICIAIS E FINAIS
-        if text.isupper() and not text[0].isdigit() and len(text) < 60:
+        # IDENTIFICAÇÃO DE SEÇÕES (Nível 1) - Todo Maiúsculo + Negrito + Sem Números
+        if text.isupper() and is_paragraph_bold(para) and not text[0:1].isdigit():
             current_n1 = text
             continue
 
-        # 4. É corpo de texto (versos ou cifras)
+        # CORPO DO TEXTO
         if current_n2:
             current_text.append(text)
 
-    # Adicionar o último hino processado
     if current_n2:
         data.append({"n1": current_n1, "n2": current_n2, "texto": "\n".join(current_text)})
-    
     return data
 
 def save_to_db(data):
-    # Deleta hinos primeiro, depois categorias (ordem de FK)
+    # Limpeza total
     supabase.table("hinos_conteudos").delete().neq("id", 0).execute()
     supabase.table("hinos_categorias").delete().neq("id", 0).execute()
     
-    # Pegar categorias únicas na ordem em que aparecem
-    categorias_vistas = []
+    # Inserção mantendo a ordem do arquivo
+    seen_cats = {}
     for item in data:
-        if item['n1'] not in categorias_vistas:
-            categorias_vistas.append(item['n1'])
-
-    for cat_nome in categorias_vistas:
-        # Insere e recupera o ID
-        res_cat = supabase.table("hinos_categorias").insert({"nome_nivel1": cat_nome}).execute()
-        # No Supabase Python, o dado retornado é uma lista em .data
-        cat_id = res_cat.data[0]['id']
+        cat_name = item['n1']
+        if cat_name not in seen_cats:
+            res = supabase.table("hinos_categorias").insert({"nome_nivel1": cat_name}).execute()
+            seen_cats[cat_name] = res.data['id']
         
-        hinos_da_cat = [
-            {"categoria_id": cat_id, "nome_nivel2": i['n2'], "texto_completo": i['texto']} 
-            for i in data if i['n1'] == cat_nome
-        ]
-        
-        if hinos_da_cat:
-            supabase.table("hinos_conteudos").insert(hinos_da_cat).execute()
+        supabase.table("hinos_conteudos").insert({
+            "categoria_id": seen_cats[cat_name],
+            "nome_nivel2": item['n2'],
+            "texto_completo": item['texto']
+        }).execute()
 
 # --- INTERFACE ---
-st.set_page_config(page_title="Hinário", layout="wide")
+st.set_page_config(page_title=" Hinário", layout="wide")
 
 with st.sidebar:
-    st.title("⚙️ Sistema")
-    arquivo = st.file_uploader("Arquivo .docx", type="docx")
-    if st.button("🚀 Processar Tudo") and arquivo:
-        with st.spinner("Limpando banco e reprocessando..."):
-            dados = process_docx(arquivo)
-            if dados:
+    st.title("⚙️ Admin")
+    arquivo = st.file_uploader("Arquivo Hinário (.docx)", type="docx")
+    if st.button("🚀 Limpar e Atualizar Banco"):
+        if arquivo:
+            with st.spinner("Processando..."):
+                dados = process_docx(arquivo)
                 save_to_db(dados)
-                st.success(f"Carregados {len(dados)} hinos em {len(set(d['n1'] for d in dados))} categorias!")
+                st.success(f"Carregado: {len(dados)} hinos!")
                 st.rerun()
-            else:
-                st.error("Não encontramos hinos no padrão '1. Título' no arquivo.")
 
-# --- EXIBIÇÃO ---
+# --- NAVEGAÇÃO ---
 try:
+    # Carrega categorias para o selectbox
     res_cat = supabase.table("hinos_categorias").select("*").order("id").execute()
     if res_cat.data:
         df_cat = pd.DataFrame(res_cat.data)
         
-        c1, c2 = st.columns([1, 2])
+        col_nav, col_txt = st.columns([1, 2])
         
-        with c1:
-            escolha_n1 = st.selectbox("📌 Selecione a Seção:", df_cat['nome_nivel1'])
-            id_n1 = int(df_cat[df_cat['nome_nivel1'] == escolha_n1]['id'].iloc[0])
+        with col_nav:
+            cat_sel = st.selectbox("1. Escolha a Seção (Nível 1):", df_cat['nome_nivel1'])
+            cat_id = int(df_cat[df_cat['nome_nivel1'] == cat_sel]['id'].iloc)
             
-            busca = st.text_input("🔍 Busca rápida:")
+            busca = st.text_input("🔍 Busca por palavra:")
             
-            query = supabase.table("hinos_conteudos").select("*").eq("categoria_id", id_n1).order("id")
+            # Busca hinos da categoria selecionada
+            q_hinos = supabase.table("hinos_conteudos").select("*").eq("categoria_id", cat_id).order("id")
             if busca:
-                query = query.ilike("nome_nivel2", f"%{busca}%")
+                q_hinos = q_hinos.ilike("nome_nivel2", f"%{busca}%")
             
-            hinos_res = query.execute().data
+            hinos_data = q_hinos.execute().data
             
-            if hinos_res:
-                lista_titulos = [h['nome_nivel2'] for h in hinos_res]
-                escolha_hino = st.radio("📑 Escolha o hino:", lista_titulos)
-                info_hino = next(h for h in hinos_res if h['nome_nivel2'] == escolha_hino)
+            if hinos_data:
+                hino_escolhido = st.radio("2. Selecione o hino:", [h['nome_nivel2'] for h in hinos_data])
+                txt_hino = next(h for h in hinos_data if h['nome_nivel2'] == hino_escolhido)
             else:
-                st.warning("Nada encontrado.")
-                info_hino = None
+                st.warning("Nenhum hino nesta busca.")
+                txt_hino = None
 
-        with c2:
-            if info_hino:
-                st.subheader(info_hino['nome_nivel2'])
+        with col_txt:
+            if txt_hino:
+                st.subheader(txt_hino['nome_nivel2'])
                 st.divider()
-                # st.code ou st.text preserva a diagramação de hinos/cifras
-                st.code(info_hino['texto_completo'], language=None)
+                st.text(txt_hino['texto_completo']) # Text preserva a formatação original
     else:
-        st.info("O banco está vazio. Use o menu lateral para subir o documento.")
+        st.info("Banco vazio. Suba o arquivo no menu lateral.")
 except Exception as e:
     st.error(f"Erro: {e}")
-
