@@ -9,53 +9,51 @@ supabase = create_client(st.secrets["URL_SUPABASE"], st.secrets["KEY_SUPABASE"])
 
 def process_docx(file):
     doc = Document(file)
-    data = []
+    paragraphs =
     
-    # 1. Identificação da Estrutura
+    data = []
     hinos_mapeados = []
     current_cat = "GERAL"
     
-    # Regex flexível para o Sumário
-    # Detecta: "1. Titulo .... 10" ou "TITULO .... 10"
-    re_hino_sumario = re.compile(r'^(\d+[\.\)].+?)(?:\s\.+)?\s\d+$')
-    re_secao_sumario = re.compile(r'^([A-ZÇÃÕÉÍÓÚ\s]{3,})(?:\s\.+)?\s\d+$')
-
-    # Passo A: Ler Sumário
-    for para in doc.paragraphs:
-        text = para.text.strip()
-        if not text: continue
-        
-        # Para se encontrar o início real dos hinos (evita ler o corpo como sumário)
-        if text.startswith("ORANTES") and "...." not in text:
-            break
+    # --- PASSO 1: LER APENAS O SUMÁRIO ---
+    # O sumário termina quando encontramos a primeira seção real ou o primeiro hino sem pontinhos
+    for text in paragraphs:
+        # Se a linha tem muitos pontos, é sumário
+        if "...." in text:
+            # Limpa o texto removendo os pontos e o número da página no final
+            clean_text = re.sub(r'\.+\s*\d+$', '', text).strip()
             
-        m_secao = re_secao_sumario.match(text)
-        m_hino = re_hino_sumario.match(text)
+            # Se começar com número, é Nível 2 (Hino)
+            if clean_text[0:1].isdigit():
+                hinos_mapeados.append({"cat": current_cat, "titulo": clean_text})
+            # Se for caixa alta e não começar com número, é Nível 1 (Categoria)
+            elif clean_text.isupper():
+                current_cat = clean_text
         
-        if m_secao:
-            current_cat = m_secao.group(1).strip()
-        elif m_hino:
-            hinos_mapeados.append({"cat": current_cat, "titulo": m_hino.group(1).strip()})
+        # Se encontrarmos o início do conteúdo real, paramos de ler o sumário
+        if text == "ORANTES" and "...." not in text:
+            break
 
-    # Passo B: Capturar Letras (Busca os títulos no corpo do texto)
+    # --- PASSO 2: BUSCAR CONTEÚDO NO CORPO DO TEXTO ---
     titulos_alvo = {h['titulo']: "" for h in hinos_mapeados}
     hino_atual = None
     buffer = []
 
-    for para in doc.paragraphs:
-        text = para.text.strip()
+    for text in paragraphs:
         if text in titulos_alvo:
             if hino_atual:
                 titulos_alvo[hino_atual] = "\n".join(buffer)
             hino_atual = text
             buffer = []
         elif hino_atual:
-            buffer.append(text)
+            # Evita capturar outros títulos de hinos como corpo de texto
+            if not any(t == text for t in titulos_alvo):
+                buffer.append(text)
     
     if hino_atual:
         titulos_alvo[hino_atual] = "\n".join(buffer)
 
-    # Passo C: Finalizar dados
+    # --- PASSO 3: ORGANIZAR DADOS FINAIS ---
     for h in hinos_mapeados:
         data.append({
             "n1": h['cat'],
@@ -65,7 +63,7 @@ def process_docx(file):
     return data
 
 def save_to_db(data):
-    # Limpa dados anteriores
+    # Limpa dados antigos
     supabase.table("hinos_conteudos").delete().neq("id", 0).execute()
     supabase.table("hinos_categorias").delete().neq("id", 0).execute()
     
@@ -73,13 +71,10 @@ def save_to_db(data):
     for item in data:
         cat_name = item['n1']
         if cat_name not in seen_cats:
-            # Inserção de Categoria
             res = supabase.table("hinos_categorias").insert({"nome_nivel1": cat_name}).execute()
             if res.data:
-                # O Supabase retorna uma lista, acessamos o primeiro elemento [0]
-                seen_cats[cat_name] = res.data[0]['id']
+                seen_cats[cat_name] = res.data[0]['id'] # Acessa o ID do primeiro item da lista
         
-        # Inserção de Conteúdo
         if cat_name in seen_cats:
             supabase.table("hinos_conteudos").insert({
                 "categoria_id": seen_cats[cat_name],
@@ -91,44 +86,46 @@ def save_to_db(data):
 st.set_page_config(page_title="Hinário Litúrgico", layout="wide")
 
 with st.sidebar:
-    st.title("⚙️ Painel Admin")
-    arquivo = st.file_uploader("Upload .docx", type="docx")
-    if st.button("🚀 Processar via Sumário") and arquivo:
-        dados = process_docx(arquivo)
-        if dados:
-            save_to_db(dados)
-            st.success(f"Sucesso! {len(dados)} hinos salvos.")
-            st.rerun()
-        else:
-            st.error("Não foi possível extrair hinos do Sumário.")
+    st.title("⚙️ Administração")
+    arquivo = st.file_uploader("Upload do Hinário (.docx)", type="docx")
+    if st.button("🚀 Processar via Sumário"):
+        if arquivo:
+            with st.spinner("Extraindo do sumário..."):
+                dados = process_docx(arquivo)
+                if dados:
+                    save_to_db(dados)
+                    st.success(f"Sucesso! {len(dados)} hinos carregados.")
+                    st.rerun()
+                else:
+                    st.error("O padrão do sumário não foi reconhecido.")
 
-# --- NAVEGAÇÃO ---
+# --- EXIBIÇÃO ---
 try:
     res_cat = supabase.table("hinos_categorias").select("*").order("id").execute()
     if res_cat.data:
         df_cat = pd.DataFrame(res_cat.data)
-        c1, c2 = st.columns([1, 2])
+        col1, col2 = st.columns([1, 2])
         
-        with c1:
-            sel_n1 = st.selectbox("📌 Escolha a Seção:", df_cat['nome_nivel1'])
-            id_n1 = int(df_cat[df_cat['nome_nivel1'] == sel_n1]['id'].iloc[0])
+        with col1:
+            sel_n1 = st.selectbox("📌 Selecione a Seção:", df_cat['nome_nivel1'])
+            cat_id = int(df_cat[df_cat['nome_nivel1'] == sel_n1]['id'].iloc[0])
             
-            busca = st.text_input("🔍 Busca:")
-            hinos_db = supabase.table("hinos_conteudos").select("*").eq("categoria_id", id_n1).order("id").execute().data
+            busca = st.text_input("🔍 Busca rápida:")
             
+            hinos_db = supabase.table("hinos_conteudos").select("*").eq("categoria_id", cat_id).order("id").execute().data
             if hinos_db:
                 if busca:
                     hinos_db = [h for h in hinos_db if busca.lower() in h['nome_nivel2'].lower()]
                 
                 lista = [h['nome_nivel2'] for h in hinos_db]
                 if lista:
-                    escolha = st.radio("📑 Selecione:", lista)
+                    escolha = st.radio("📑 Selecione o hino:", lista)
                     info = next(h for h in hinos_db if h['nome_nivel2'] == escolha)
-                    with c2:
+                    with col2:
                         st.subheader(info['nome_nivel2'])
                         st.divider()
                         st.text(info['texto_completo'])
     else:
-        st.info("💡 Banco de dados vazio. Faça o upload no menu lateral.")
+        st.info("💡 Banco vazio. Faça o upload no menu lateral.")
 except Exception as e:
-    st.error(f"Erro: {e}")
+    st.error(f"Aguardando configuração ou upload: {e}")
