@@ -17,7 +17,6 @@ CATEGORIAS_ALVO = [
 def process_pdf_with_coords(file):
     data = []
     current_n1 = "Sem Categoria"
-    current_n2 = None
     
     with pdfplumber.open(file) as pdf:
         progresso = st.progress(0)
@@ -25,7 +24,6 @@ def process_pdf_with_coords(file):
         
         for i, page in enumerate(pdf.pages):
             words = page.extract_words()
-            # Extraímos o texto por linhas para identificar os títulos
             linhas_texto = page.extract_text().split('\n')
             
             for texto_linha in linhas_texto:
@@ -35,19 +33,20 @@ def process_pdf_with_coords(file):
                     current_n1 = texto_limpo.upper()
                     continue
 
-                # Identifica títulos que começam com "Número."
                 if re.match(r'^\d+\.', texto_limpo):
-                    # CORREÇÃO DEFINITIVA: Busca a coordenada vertical (top) da primeira palavra do título
-                    primeira_parte_titulo = texto_limpo.split()[0]
+                    primeira_parte = texto_limpo.split()[0]
                     y_top = 0
                     for w in words:
-                        if w == primeira_parte_titulo:
+                        if w == primeira_parte:
                             y_top = float(w['top'])
                             break
                     
-                    # Se já havia um hino anterior na mesma página, o fim dele é o início deste
+                    # Se houver um hino anterior na mesma página, define o fim dele
                     if data and data[-1]['pag_fim'] == i + 1:
-                        data[-1]['y_fim'] = y_top - 5
+                        # Garante que o fim seja maior que o início para evitar erro de crop
+                        novo_fim = y_top - 5
+                        if novo_fim > data[-1]['y_ini']:
+                            data[-1]['y_fim'] = novo_fim
 
                     data.append({
                         "n1": current_n1,
@@ -60,26 +59,21 @@ def process_pdf_with_coords(file):
             progresso.progress((i + 1) / total_pags)
     return data
 def save_to_db(data):
-    # Limpeza original
     supabase.table("hinos_conteudos").delete().neq("id", 0).execute()
     supabase.table("hinos_categorias").delete().neq("id", 0).execute()
     
     for cat_nome in CATEGORIAS_ALVO:
         res = supabase.table("hinos_categorias").insert({"nome_nivel1": cat_nome}).execute()
         if res.data:
-            # Pega o ID da categoria criada (Supabase retorna lista)
             cat_id = res.data[0]['id']
-            
             itens = [
                 {
                     "categoria_id": cat_id, 
                     "nome_nivel2": item['n2'],
-                    # Guardamos: pag_ini ; y_ini ; pag_fim ; y_fim
                     "texto_completo": f"{item['pag_inicio']};{item['y_ini']};{item['pag_fim']};{item['y_fim']}"
                 } for item in data if item['n1'] == cat_nome
             ]
-            if itens:
-                supabase.table("hinos_conteudos").insert(itens).execute()
+            if itens: supabase.table("hinos_conteudos").insert(itens).execute()
 
 # --- INTERFACE ---
 st.set_page_config(page_title="Hinário Litúrgico", layout="wide")
@@ -97,20 +91,14 @@ try:
     if res_cat.data and arquivo:
         df_cat = pd.DataFrame(res_cat.data)
         c1, c2 = st.columns(2)
-        
         with c1:
             escolha_n1 = st.selectbox("Categoria", df_cat['nome_nivel1'], key="c_select")
             id_n1 = int(df_cat[df_cat['nome_nivel1'] == escolha_n1]['id'].iloc[0])
         
         hinos = supabase.table("hinos_conteudos").select("*").eq("categoria_id", id_n1).execute().data
-        
         if hinos:
-            # Ordenação numérica para o seletor não ficar bagunçado
-            hinos_ordenados = sorted(hinos, key=lambda x: int(re.search(r'\d+', x['nome_nivel2']).group()))
-            titulos = [h['nome_nivel2'] for h in hinos_ordenados]
-            
-            # Key dinâmica para resetar a lista ao trocar de categoria
-            hino_sel = st.selectbox("Hino:", titulos, key=f"sel_{escolha_n1}")
+            hinos_ord = sorted(hinos, key=lambda x: int(re.search(r'\d+', x['nome_nivel2']).group()))
+            hino_sel = st.selectbox("Hino:", [h['nome_nivel2'] for h in hinos_ord], key=f"sel_{escolha_n1}")
             
             item = next(h for h in hinos if h['nome_nivel2'] == hino_sel)
             c = item['texto_completo'].split(';')
@@ -119,8 +107,9 @@ try:
             st.divider()
             with pdfplumber.open(arquivo) as pdf:
                 page = pdf.pages[p_ini - 1]
-                # Realiza o CROP (Recorte vertical): (x0, top, x1, bottom)
-                # O crop isola apenas o hino selecionado
+                # Validação final antes do crop para evitar erros
+                if y_fim <= y_ini: y_fim = float(page.height)
+                
                 recorte = page.crop((0, y_ini, page.width, y_fim))
                 st.image(recorte.to_image(resolution=200).original, use_container_width=True)
     else:
