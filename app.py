@@ -4,9 +4,10 @@ import re
 from supabase import create_client
 import pandas as pd
 
-# Conexão
+# Conexão original mantida
 supabase = create_client(st.secrets["URL_SUPABASE"], st.secrets["KEY_SUPABASE"])
 
+# Lista exata definida por você
 CATEGORIAS_ALVO = [
     "ORANTES", "INICIAIS E FINAIS", "PERDÃO", "GLÓRIA", "DEUS NOS FALA", 
     "SALMO", "ACLAMAÇÃO", "OFERTÓRIO", "LOUVOR", "SANTO", "CORDEIRO", 
@@ -56,22 +57,23 @@ def process_pdf_as_images(file):
             })
     return data
 def save_to_db(data):
+    # Limpa dados antigos
     supabase.table("hinos_conteudos").delete().neq("id", 0).execute()
     supabase.table("hinos_categorias").delete().neq("id", 0).execute()
     
     for cat_nome in CATEGORIAS_ALVO:
         res = supabase.table("hinos_categorias").insert({"nome_nivel1": cat_nome}).execute()
         
-        # CORREÇÃO: Acessando o ID corretamente na lista de retorno
-        if res.data and len(res.data) > 0:
+        # Acesso seguro ao ID (Supabase retorna lista)
+        if res.data:
             cat_id = res.data[0]['id']
             
+            # Salvamos o intervalo de páginas no campo 'texto_completo' para não dar erro de coluna
             itens = [
                 {
                     "categoria_id": cat_id, 
                     "nome_nivel2": item['n2'], 
-                    "pag_inicio": item['pag_inicio'],
-                    "pag_fim": item['pag_fim']
+                    "texto_completo": f"{item['pag_inicio']}-{item['pag_fim']}" 
                 } 
                 for item in data if item['n1'] == cat_nome
             ]
@@ -96,7 +98,7 @@ try:
         c1, c2 = st.columns(2)
         with c1:
             escolha_n1 = st.selectbox("Categoria", df_cat['nome_nivel1'])
-            id_n1 = int(df_cat[df_cat['nome_nivel1'] == escolha_n1]['id'].iloc[0])
+            id_n1 = int(df_cat[df_cat['nome_nivel1'] == escolha_n1]['id'])
         
         hinos = supabase.table("hinos_conteudos").select("*").eq("categoria_id", id_n1).execute().data
 
@@ -104,13 +106,17 @@ try:
             hino_sel = st.selectbox("Hino:", [h['nome_nivel2'] for h in hinos])
             dados_hino = next(h for h in hinos if h['nome_nivel2'] == hino_sel)
             
+            # Recupera as páginas guardadas no campo de texto
+            paginas = dados_hino['texto_completo'].split('-')
+            p_ini, p_fim = int(paginas[0]), int(paginas[1])
+            
             st.divider()
             with pdfplumber.open(arquivo) as pdf:
-                # Renderiza as páginas como imagens para fidelidade total
-                for p_num in range(dados_hino['pag_inicio'], dados_hino['pag_fim'] + 1):
+                for p_num in range(p_ini, p_fim + 1):
+                    # Tira a "foto" da página para fidelidade total
                     img = pdf.pages[p_num - 1].to_image(resolution=200).original
                     st.image(img, use_container_width=True)
     else:
-        st.info("Faça o upload do PDF para visualizar os hinos.")
+        st.info("Aguardando upload do PDF para visualização.")
 except Exception as e:
-    st.error(f"Erro: {e}")
+    st.error(f"Erro de conexão ou dados: {e}")
