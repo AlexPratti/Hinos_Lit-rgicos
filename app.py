@@ -7,7 +7,6 @@ import pandas as pd
 # Conexão original mantida
 supabase = create_client(st.secrets["URL_SUPABASE"], st.secrets["KEY_SUPABASE"])
 
-# Lista exata definida por você
 CATEGORIAS_ALVO = [
     "ORANTES", "INICIAIS E FINAIS", "PERDÃO", "GLÓRIA", "DEUS NOS FALA", 
     "SALMO", "ACLAMAÇÃO", "OFERTÓRIO", "LOUVOR", "SANTO", "CORDEIRO", 
@@ -57,18 +56,16 @@ def process_pdf_as_images(file):
             })
     return data
 def save_to_db(data):
-    # Limpa dados antigos
     supabase.table("hinos_conteudos").delete().neq("id", 0).execute()
     supabase.table("hinos_categorias").delete().neq("id", 0).execute()
     
     for cat_nome in CATEGORIAS_ALVO:
         res = supabase.table("hinos_categorias").insert({"nome_nivel1": cat_nome}).execute()
         
-        # Acesso seguro ao ID (Supabase retorna lista)
         if res.data:
+            # Pega o ID como inteiro puro
             cat_id = res.data[0]['id']
             
-            # Salvamos o intervalo de páginas no campo 'texto_completo' para não dar erro de coluna
             itens = [
                 {
                     "categoria_id": cat_id, 
@@ -83,8 +80,8 @@ def save_to_db(data):
 # --- INTERFACE ---
 st.set_page_config(page_title="Hinário Visual", layout="wide")
 
-with st.expander("⬆️ Sincronizar PDF"):
-    arquivo = st.file_uploader("Selecione o PDF", type="pdf")
+with st.expander("⬆️ Upload PDF"):
+    arquivo = st.file_uploader("Selecione o arquivo", type="pdf")
     if st.button("Atualizar Banco") and arquivo:
         dados = process_pdf_as_images(arquivo)
         save_to_db(dados)
@@ -96,9 +93,11 @@ try:
     if res_cat.data and arquivo:
         df_cat = pd.DataFrame(res_cat.data)
         c1, c2 = st.columns(2)
+        
         with c1:
             escolha_n1 = st.selectbox("Categoria", df_cat['nome_nivel1'])
-            id_n1 = int(df_cat[df_cat['nome_nivel1'] == escolha_n1]['id'])
+            # CORREÇÃO: .iloc[0] transforma a Series do Pandas em um valor único (int)
+            id_n1 = int(df_cat[df_cat['nome_nivel1'] == escolha_n1]['id'].iloc[0])
         
         hinos = supabase.table("hinos_conteudos").select("*").eq("categoria_id", id_n1).execute().data
 
@@ -106,17 +105,17 @@ try:
             hino_sel = st.selectbox("Hino:", [h['nome_nivel2'] for h in hinos])
             dados_hino = next(h for h in hinos if h['nome_nivel2'] == hino_sel)
             
-            # Recupera as páginas guardadas no campo de texto
-            paginas = dados_hino['texto_completo'].split('-')
-            p_ini, p_fim = int(paginas[0]), int(paginas[1])
+            # Recupera o intervalo de páginas
+            pag_str = dados_hino['texto_completo'].split('-')
+            p_ini, p_fim = int(pag_str[0]), int(pag_str[1])
             
             st.divider()
             with pdfplumber.open(arquivo) as pdf:
                 for p_num in range(p_ini, p_fim + 1):
-                    # Tira a "foto" da página para fidelidade total
+                    # Foto da página com boa resolução (200 dpi)
                     img = pdf.pages[p_num - 1].to_image(resolution=200).original
                     st.image(img, use_container_width=True)
     else:
-        st.info("Aguardando upload do PDF para visualização.")
+        st.info("Aguardando PDF...")
 except Exception as e:
-    st.error(f"Erro de conexão ou dados: {e}")
+    st.error(f"Erro: {e}")
