@@ -23,8 +23,8 @@ def process_pdf(file):
     with pdfplumber.open(file) as pdf:
         progresso = st.progress(0)
         for i, page in enumerate(pdf.pages):
-            # layout=True preserva a posição física das cifras no papel
-            text = page.extract_text(layout=True)
+            # O ajuste de x_tolerance impede que cifras e letras se misturem na mesma linha
+            text = page.extract_text(layout=True, x_tolerance=2, y_tolerance=2)
             if not text: continue
             
             linhas = text.split('\n')
@@ -32,7 +32,7 @@ def process_pdf(file):
                 texto_limpo = linha.strip()
                 if not texto_limpo or "Sumário" in texto_limpo: continue
 
-                # Identifica Nível 1
+                # Identifica Nível 1 (Categorias)
                 if texto_limpo.upper() in CATEGORIAS_ALVO:
                     if current_n2:
                         data.append({"n1": current_n1, "n2": current_n2, "texto": "\n".join(current_text)})
@@ -42,17 +42,18 @@ def process_pdf(file):
                     data.append({"n1": current_n1, "n2": None, "texto": ""})
                     continue
 
-                # Identifica Nível 2
+                # Identifica Nível 2 (Hinos)
                 if re.match(r'^\d+\.', texto_limpo):
                     if current_n2:
                         data.append({"n1": current_n1, "n2": current_n2, "texto": "\n".join(current_text)})
                     current_n2 = texto_limpo
                     current_text = []
                     
-                # CAPTURA O CORPO (Importante: mantemos a 'linha' com espaços originais)
+                # CAPTURA O CORPO (Preservando a linha original com todos os espaços)
                 elif current_n2:
                     if not texto_limpo.isdigit():
-                        current_text.append(linha) # Aqui usamos 'linha' para não perder espaços
+                        # Salvamos a linha bruta para manter o alinhamento das cifras
+                        current_text.append(linha)
 
             progresso.progress((i + 1) / len(pdf.pages))
 
@@ -66,7 +67,7 @@ def save_to_db(data):
     categorias_encontradas = sorted(list(set([item['n1'] for item in data])))
     for cat_nome in categorias_encontradas:
         res = supabase.table("hinos_categorias").insert({"nome_nivel1": cat_nome}).execute()
-        cat_id = res.data[0]['id']
+        cat_id = res.data['id']
         
         itens = [
             {"categoria_id": cat_id, "nome_nivel2": item['n2'], "texto_completo": item['texto']} 
@@ -92,7 +93,7 @@ try:
         c1, c2 = st.columns(2)
         with c1:
             escolha_n1 = st.selectbox("Categoria", df_cat['nome_nivel1'])
-            id_n1 = int(df_cat[df_cat['nome_nivel1'] == escolha_n1]['id'].iloc[0])
+            id_n1 = int(df_cat[df_cat['nome_nivel1'] == escolha_n1]['id'].iloc)
         
         hinos = supabase.table("hinos_conteudos").select("*").eq("categoria_id", id_n1).execute().data
 
@@ -101,10 +102,11 @@ try:
             conteudo = next(h for h in hinos if h['nome_nivel2'] == hino_sel)
             
             st.markdown("---")
-            # CSS PARA FORÇAR ALINHAMENTO DE CIFRAS
+            # CSS PARA FORÇAR FONT-FAMILY MONOSPACED E IMPEDIR WRAP
+            # white-space: pre garante que a cifra não pule para a linha da letra
             st.markdown(f"""
-            <div style="background-color: #ffffff; padding: 20px; border: 1px solid #eee; border-radius: 5px;">
-                <pre style="font-family: 'Courier New', monospace; font-size: 16px; white-space: pre; color: #333;">{conteudo['texto_completo']}</pre>
+            <div style="background-color: #ffffff; padding: 20px; border: 1px solid #ddd; border-radius: 8px; overflow-x: auto;">
+                <pre style="font-family: 'Courier New', Courier, monospace; font-size: 15px; white-space: pre; word-wrap: normal; color: #1e1e1e; line-height: 1.5;">{conteudo['texto_completo']}</pre>
             </div>
             """, unsafe_allow_html=True)
 except Exception as e:
