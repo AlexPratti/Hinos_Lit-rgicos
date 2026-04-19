@@ -23,38 +23,39 @@ def process_pdf_with_coords(file):
         total_pags = len(pdf.pages)
         
         for i, page in enumerate(pdf.pages):
+            # Extraímos as palavras com coordenadas exatas
             words = page.extract_words()
-            linhas_texto = page.extract_text().split('\n')
             
-            for texto_linha in linhas_texto:
-                texto_limpo = texto_linha.strip()
+            # Buscamos linhas que começam com "Número." (ex: 2., 3., 4.)
+            for obj in page.extract_text().split('\n'):
+                texto_linha = obj.strip()
                 
-                if texto_limpo.upper() in CATEGORIAS_ALVO:
-                    current_n1 = texto_limpo.upper()
+                if texto_linha.upper() in CATEGORIAS_ALVO:
+                    current_n1 = texto_linha.upper()
                     continue
 
-                if re.match(r'^\d+\.', texto_limpo):
-                    primeira_parte = texto_limpo.split()[0]
+                if re.match(r'^\d+\.', texto_linha):
+                    # Localizamos o Y exato do título do hino
+                    # Pegamos a primeira palavra (o número) para marcar o topo
+                    num_titulo = texto_linha.split()[0]
                     y_top = 0
                     for w in words:
-                        if w == primeira_parte:
+                        if w == num_titulo:
                             y_top = float(w['top'])
                             break
                     
-                    # Se houver um hino anterior na mesma página, define o fim dele
+                    # Se houver um hino anterior na mesma página, definimos que ele termina onde este começa
                     if data and data[-1]['pag_fim'] == i + 1:
-                        # Garante que o fim seja maior que o início para evitar erro de crop
-                        novo_fim = y_top - 5
-                        if novo_fim > data[-1]['y_ini']:
-                            data[-1]['y_fim'] = novo_fim
+                        data[-1]['y_fim'] = y_top - 5
 
+                    # Adicionamos o novo hino iniciando exatamente no y_top encontrado
                     data.append({
                         "n1": current_n1,
-                        "n2": texto_limpo,
+                        "n2": texto_linha,
                         "pag_inicio": i + 1,
-                        "y_ini": y_top - 10 if y_top > 10 else 0,
+                        "y_ini": y_top - 10 if y_top > 10 else 0, # Margem acima do título
                         "pag_fim": i + 1,
-                        "y_fim": float(page.height) 
+                        "y_fim": float(page.height) # Por enquanto vai até o fim da página
                     })
             progresso.progress((i + 1) / total_pags)
     return data
@@ -70,6 +71,7 @@ def save_to_db(data):
                 {
                     "categoria_id": cat_id, 
                     "nome_nivel2": item['n2'],
+                    # Guardamos as 4 coordenadas para o recorte perfeito
                     "texto_completo": f"{item['pag_inicio']};{item['y_ini']};{item['pag_fim']};{item['y_fim']}"
                 } for item in data if item['n1'] == cat_nome
             ]
@@ -83,7 +85,7 @@ with st.expander("⬆️ Sincronizar Novo PDF"):
     if st.button("Atualizar Banco de Dados") and arquivo:
         dados = process_pdf_with_coords(arquivo)
         save_to_db(dados)
-        st.success("Banco de dados atualizado!")
+        st.success("Banco de dados atualizado! Faça a busca agora.")
         st.rerun()
 
 try:
@@ -97,8 +99,9 @@ try:
         
         hinos = supabase.table("hinos_conteudos").select("*").eq("categoria_id", id_n1).execute().data
         if hinos:
+            # Ordenação numérica correta (1, 2, 3...)
             hinos_ord = sorted(hinos, key=lambda x: int(re.search(r'\d+', x['nome_nivel2']).group()))
-            hino_sel = st.selectbox("Hino:", [h['nome_nivel2'] for h in hinos_ord], key=f"sel_{escolha_n1}")
+            hino_sel = st.selectbox("Escolha o Hino:", [h['nome_nivel2'] for h in hinos_ord], key=f"sel_{escolha_n1}")
             
             item = next(h for h in hinos if h['nome_nivel2'] == hino_sel)
             c = item['texto_completo'].split(';')
@@ -107,12 +110,13 @@ try:
             st.divider()
             with pdfplumber.open(arquivo) as pdf:
                 page = pdf.pages[p_ini - 1]
-                # Validação final antes do crop para evitar erros
+                # Trava de segurança: y_fim deve ser maior que y_ini
                 if y_fim <= y_ini: y_fim = float(page.height)
                 
+                # Realiza o RECORTE (Crop): isola do y_ini até o y_fim
                 recorte = page.crop((0, y_ini, page.width, y_fim))
                 st.image(recorte.to_image(resolution=200).original, use_container_width=True)
     else:
         st.info("Aguardando upload e seleção.")
 except Exception as e:
-    st.error(f"Erro: {e}")
+    st.error(f"Selecione uma categoria válida. Erro técnico: {e}")
