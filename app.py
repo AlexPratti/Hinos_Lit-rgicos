@@ -4,7 +4,7 @@ import re
 from supabase import create_client
 import pandas as pd
 
-# Conexão original
+# Conexão
 supabase = create_client(st.secrets["URL_SUPABASE"], st.secrets["KEY_SUPABASE"])
 
 CATEGORIAS_ALVO = [
@@ -23,8 +23,8 @@ def process_pdf(file):
     with pdfplumber.open(file) as pdf:
         progresso = st.progress(0)
         for i, page in enumerate(pdf.pages):
-            # O ajuste de x_tolerance impede que cifras e letras se misturem na mesma linha
-            text = page.extract_text(layout=True, x_tolerance=2, y_tolerance=2)
+            # Layout=True preserva a posição das cifras acima das letras
+            text = page.extract_text(layout=True)
             if not text: continue
             
             linhas = text.split('\n')
@@ -32,7 +32,7 @@ def process_pdf(file):
                 texto_limpo = linha.strip()
                 if not texto_limpo or "Sumário" in texto_limpo: continue
 
-                # Identifica Nível 1 (Categorias)
+                # Nível 1
                 if texto_limpo.upper() in CATEGORIAS_ALVO:
                     if current_n2:
                         data.append({"n1": current_n1, "n2": current_n2, "texto": "\n".join(current_text)})
@@ -42,17 +42,16 @@ def process_pdf(file):
                     data.append({"n1": current_n1, "n2": None, "texto": ""})
                     continue
 
-                # Identifica Nível 2 (Hinos)
+                # Nível 2
                 if re.match(r'^\d+\.', texto_limpo):
                     if current_n2:
                         data.append({"n1": current_n1, "n2": current_n2, "texto": "\n".join(current_text)})
                     current_n2 = texto_limpo
                     current_text = []
                     
-                # CAPTURA O CORPO (Preservando a linha original com todos os espaços)
                 elif current_n2:
                     if not texto_limpo.isdigit():
-                        # Salvamos a linha bruta para manter o alinhamento das cifras
+                        # Mantém a linha bruta (com espaços) para alinhar as cifras
                         current_text.append(linha)
 
             progresso.progress((i + 1) / len(pdf.pages))
@@ -67,14 +66,17 @@ def save_to_db(data):
     categorias_encontradas = sorted(list(set([item['n1'] for item in data])))
     for cat_nome in categorias_encontradas:
         res = supabase.table("hinos_categorias").insert({"nome_nivel1": cat_nome}).execute()
-        cat_id = res.data['id']
         
-        itens = [
-            {"categoria_id": cat_id, "nome_nivel2": item['n2'], "texto_completo": item['texto']} 
-            for item in data if item['n1'] == cat_nome and item['n2'] is not None
-        ]
-        if itens:
-            supabase.table("hinos_conteudos").insert(itens).execute()
+        # CORREÇÃO DO ERRO: res.data é uma lista, pegamos o primeiro item [0]
+        if res.data:
+            cat_id = res.data[0]['id']
+            
+            itens = [
+                {"categoria_id": cat_id, "nome_nivel2": item['n2'], "texto_completo": item['texto']} 
+                for item in data if item['n1'] == cat_nome and item['n2'] is not None
+            ]
+            if itens:
+                supabase.table("hinos_conteudos").insert(itens).execute()
 
 # --- INTERFACE ---
 st.set_page_config(page_title="Hinário", layout="wide")
@@ -84,6 +86,7 @@ with st.expander("⬆️ Upload PDF"):
     if st.button("Atualizar Banco") and arquivo:
         dados = process_pdf(arquivo)
         save_to_db(dados)
+        st.success("Banco atualizado!")
         st.rerun()
 
 try:
@@ -93,7 +96,7 @@ try:
         c1, c2 = st.columns(2)
         with c1:
             escolha_n1 = st.selectbox("Categoria", df_cat['nome_nivel1'])
-            id_n1 = int(df_cat[df_cat['nome_nivel1'] == escolha_n1]['id'].iloc)
+            id_n1 = int(df_cat[df_cat['nome_nivel1'] == escolha_n1]['id'])
         
         hinos = supabase.table("hinos_conteudos").select("*").eq("categoria_id", id_n1).execute().data
 
@@ -102,11 +105,10 @@ try:
             conteudo = next(h for h in hinos if h['nome_nivel2'] == hino_sel)
             
             st.markdown("---")
-            # CSS PARA FORÇAR FONT-FAMILY MONOSPACED E IMPEDIR WRAP
-            # white-space: pre garante que a cifra não pule para a linha da letra
+            # CSS estrito para manter cifras alinhadas
             st.markdown(f"""
             <div style="background-color: #ffffff; padding: 20px; border: 1px solid #ddd; border-radius: 8px; overflow-x: auto;">
-                <pre style="font-family: 'Courier New', Courier, monospace; font-size: 15px; white-space: pre; word-wrap: normal; color: #1e1e1e; line-height: 1.5;">{conteudo['texto_completo']}</pre>
+                <pre style="font-family: 'Courier New', Courier, monospace; font-size: 15px; white-space: pre; color: #1e1e1e;">{conteudo['texto_completo']}</pre>
             </div>
             """, unsafe_allow_html=True)
 except Exception as e:
