@@ -1,63 +1,94 @@
 import streamlit as st
-import segno
-from io import BytesIO
+from docx import Document
+from supabase import create_client
+import pandas as pd
 
-# Configuração da página
-st.set_page_config(page_title="Gerador QR Turbo", page_icon="⚡")
+# Conexão com os nomes que você definiu no Secrets
+url = st.secrets["URL_SUPABASE"]
+key = st.secrets["KEY_SUPABASE"]
+supabase = create_client(url, key)
 
-# Inicializa o estado do campo de URL se não existir
-if 'url_input' not in st.session_state:
-    st.session_state.url_input = ""
+def process_docx(file):
+    doc = Document(file)
+    data = []
+    current_n1 = None
+    for para in doc.paragraphs:
+        style = para.style.name
+        # Identifica Títulos 1 e 2 (ajuste conforme o idioma do seu Word)
+        if 'Heading 1' in style or 'Título 1' in style:
+            current_n1 = para.text.strip()
+        elif ('Heading 2' in style or 'Título 2' in style) and current_n1:
+            data.append({"n1": current_n1, "n2": para.text.strip()})
+    return data
 
-# Função para limpar o campo
-def limpar_campo():
-    st.session_state.url_input = ""
-
-st.title("🎯 Gerador de QR Code")
-st.write("Insira o link abaixo. O sistema gerará o código de alta fidelidade.")
-
-# Campo de entrada vinculado ao session_state
-url = st.text_input("Cole a URL aqui:", key="url_input")
-
-col1, col2 = st.columns([1, 5])
-
-with col1:
-    btn_gerar = st.button("Gerar QR")
-
-with col2:
-    if st.button("Limpar Tudo", on_click=limpar_campo):
-        st.rerun()
-
-if btn_gerar and url:
-    # 1. Tratamento da URL
-    url_final = url.strip()
-    if not url_final.startswith(("http://", "https://")):
-        url_final = f"https://{url_final}"
-
-    try:
-        # 2. Geração do QR Code (Baixa densidade para melhor leitura)
-        qr = segno.make_qr(url_final, error='l')
+def save_to_db(data):
+    # Limpa as tabelas existentes (Sobrepõe o arquivo)
+    # Importante: a ordem de delete evita erro de chave estrangeira
+    supabase.table("hinos_conteudos").delete().neq("id", 0).execute()
+    supabase.table("hinos_categorias").delete().neq("id", 0).execute()
+    
+    categorias_unicas = sorted(list(set([item['n1'] for item in data])))
+    for cat in categorias_unicas:
+        res = supabase.table("hinos_categorias").insert({"nome_nivel1": cat}).execute()
+        cat_id = res.data[0]['id']
         
-        buf = BytesIO()
-        # Scale 20 e Border 10 para facilitar o foco no Redmi
-        qr.save(buf, kind='png', scale=20, border=10)
-        byte_im = buf.getvalue()
+        itens = [
+            {"categoria_id": cat_id, "nome_nivel2": item['n2']} 
+            for item in data if item['n1'] == cat
+        ]
+        if itens:
+            supabase.table("hinos_conteudos").insert(itens).execute()
 
-        # 3. Exibição e Download
-        st.success(f"Link processado: {url_final}")
-        st.image(byte_im, caption="QR Code Gerado", width=400)
+# --- Interface ---
+st.set_page_config(page_title="Hinos Litúrgicos", layout="wide")
+st.title("📖 Hinário Litúrgico")
 
-        st.download_button(
-            label="📥 Baixar Imagem (PNG)",
-            data=byte_im,
-            file_name="qrcode_gerado.png",
-            mime="image/png"
-        )
+# Área de Upload (oculta por padrão para não ocupar tela)
+with st.expander("⬆️ Upload de novo arquivo (.docx)"):
+    arquivo = st.file_uploader("Isso substituirá todos os hinos atuais", type="docx")
+    if st.button("Confirmar Processamento"):
+        if arquivo:
+            with st.spinner("Processando..."):
+                dados = process_docx(arquivo)
+                save_to_db(dados)
+                st.success("Banco de dados atualizado com sucesso!")
+                st.rerun()
+
+# Carregamento de Dados
+try:
+    res_cat = supabase.table("hinos_categorias").select("id, nome_nivel1").order("nome_nivel1").execute()
+    
+    if res_cat.data:
+        df_cat = pd.DataFrame(res_cat.data)
         
-        st.info("💡 Para gerar um novo, clique em 'Limpar Tudo' acima.")
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            cat_selecionada = st.selectbox("1. Selecione a Categoria:", df_cat['nome_nivel1'])
+            cat_id = int(df_cat[df_cat['nome_nivel1'] == cat_selecionada]['id'].iloc[0])
+        
+        with col2:
+            busca = st.text_input("2. 🔍 Filtrar Título (Nível 2):", placeholder="Digite uma palavra-chave...")
 
-    except Exception as e:
-        st.error("Erro ao gerar o código. Verifique o link inserido.")
+        # Busca hinos vinculados à categoria
+        query = supabase.table("hinos_conteudos").select("nome_nivel2").eq("categoria_id", cat_id).order("nome_nivel2")
+        
+        if busca:
+            query = query.ilike("nome_nivel2", f"%{busca}%")
+        
+        res_hinos = query.execute()
+        
+        if res_hinos.data:
+            hinos_lista = [h['nome_nivel2'] for h in res_hinos.data]
+            st.markdown(f"### Lista de hinos em: **{cat_selecionada}**")
+            # Radio button para o usuário escolher o hino final
+            escolha_final = st.radio("Selecione para visualizar:", hinos_lista, label_visibility="collapsed")
+            
+            if escolha_final:
+                st.info(f"Você selecionou: **{escolha_final}**")
+        else:
+            st.warning("Nenhum título encontrado com este filtro.")
+    else:
+        st.info("O banco de dados está vazio. Por favor, suba um arquivo docx no menu acima.")
 
-elif btn_gerar and not url:
-    st.warning("Por favor, insira uma URL antes de gerar.")
+except Exception as e:
+    st.error(f"Erro ao conectar ao banco: {e}")
