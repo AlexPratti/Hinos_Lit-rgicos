@@ -16,6 +16,7 @@ def process_pdf_simple(file):
     current_n1 = "Sem Categoria"
     with pdfplumber.open(file) as pdf:
         progresso = st.progress(0)
+        total_pags = len(pdf.pages)
         for i, page in enumerate(pdf.pages):
             text = page.extract_text()
             if not text: continue
@@ -25,7 +26,7 @@ def process_pdf_simple(file):
                     current_n1 = t_limpo.upper()
                 elif re.match(r'^\d+\.', t_limpo):
                     data.append({"n1": current_n1, "n2": t_limpo, "pag": i + 1})
-            progresso.progress((i + 1) / len(pdf.pages))
+            progresso.progress((i + 1) / total_pags)
     return data
 
 def save_to_db(data):
@@ -70,48 +71,46 @@ try:
             titulos_lista = [h['nome_nivel2'] for h in hinos_ord]
             hino_sel = st.selectbox("Hino", titulos_lista, key=f"h_{escolha_n1}")
             
-            # Buscamos a página do hino selecionado no banco
             item_db = next(h for h in hinos if h['nome_nivel2'] == hino_sel)
             p_num = int(item_db['texto_completo'])
 
             st.divider()
             with pdfplumber.open(arquivo_persistente) as pdf:
                 page = pdf.pages[p_num - 1]
-                # Extraímos as linhas com objetos de texto para pegar o 'top' (y) de cada linha
-                text_objects = page.extract_text_lines()
+                # Pegamos as linhas com as coordenadas corretas
+                text_lines = page.extract_text_lines()
                 
                 y_ini = 0
                 y_fim = page.height
 
-                # PASSO 1: Identificar o INÍCIO (y_ini) baseado na seleção exata
-                for obj in text_objects:
-                    if hino_sel in obj:
-                        y_ini = obj['top']
+                # PASSO 1: Localiza o y_ini (Início) comparando o texto selecionado
+                for line in text_lines:
+                    if hino_sel in line['text']:
+                        y_ini = line['top']
                         break
                 
-                # PASSO 2: Identificar o FIM (y_fim) baseado no PRÓXIMO TÍTULO ou CATEGORIA
-                # Começamos a busca a partir da linha após o y_ini
-                for obj in text_objects:
-                    if obj['top'] > y_ini:
-                        # Se encontrar uma linha que começa com número e ponto (Próximo hino)
-                        if re.match(r'^\d+\.', obj.strip()):
-                            y_fim = obj['top']
+                # PASSO 2: Localiza o y_fim (Fim) procurando o próximo hino ou categoria abaixo de y_ini
+                for line in text_lines:
+                    # Só avaliamos linhas que estão abaixo do início do hino selecionado
+                    if line['top'] > y_ini + 5:
+                        conteudo_linha = line['text'].strip()
+                        # Se for um título de hino (começa com número)
+                        if re.match(r'^\d+\.', conteudo_linha):
+                            y_fim = line['top']
                             break
-                        # Ou se encontrar o nome de uma categoria alvo
-                        if obj.strip().upper() in CATEGORIAS_ALVO:
-                            y_fim = obj['top']
+                        # Se for uma categoria alvo
+                        if conteudo_linha.upper() in CATEGORIAS_ALVO:
+                            y_fim = line['top']
                             break
 
-                # AJUSTE DE MARGEM: Pequeno respiro para não cortar a letra
-                y_ini_final = max(0, y_ini - 10)
-                y_fim_final = y_fim - 5 if y_fim < page.height else page.height
-
-                # PASSO 3: Executa o Crop Final
-                if y_fim_final <= y_ini_final: y_fim_final = page.height
+                # AJUSTE FINAL: Margem de segurança e validação de altura
+                y_ini_crop = max(0, y_ini - 10)
+                if y_fim <= y_ini_crop: y_fim = page.height
                 
-                recorte = page.crop((0, y_ini_final, page.width, y_fim_final))
-                st.image(recorte.to_image(resolution=200).original, use_container_width=True)
+                # RECORTE
+                img = page.crop((0, y_ini_crop, page.width, y_fim)).to_image(resolution=200).original
+                st.image(img, use_container_width=True)
     else:
         st.info("Aguardando PDF...")
 except Exception as e:
-    st.error(f"Selecione uma categoria válida. (Erro: {e})")
+    st.error(f"Erro ao carregar: {e}")
