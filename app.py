@@ -5,40 +5,63 @@ from supabase import create_client
 import pandas as pd
 import io
 
+# Conexão original
 supabase = create_client(st.secrets["URL_SUPABASE"], st.secrets["KEY_SUPABASE"])
 BUCKET = "hinarios"
 
-CATEGORIAS_LITURGICOS = ["ORANTES", "INICIAIS E FINAIS", "PERDÃO", "GLÓRIA", "DEUS NOS FALA", "SALMO", "ACLAMAÇÃO", "OFERTÓRIO", "LOUVOR", "SANTO", "CORDEIRO", "PAZ", "COMUNHÃO", "BÍBLIA", "CRUZ", "LADAINHAS – SEQUÊNCIAS - PROCLAMAÇÕES", "MARIA", "PRECES"]
+# Lista fiel para o Hinário Litúrgico
+CATEGORIAS_LITURGICOS = [
+    "ORANTES", "INICIAIS E FINAIS", "PERDÃO", "GLÓRIA", "DEUS NOS FALA", 
+    "SALMO", "ACLAMAÇÃO", "OFERTÓRIO", "LOUVOR", "SANTO", "CORDEIRO", 
+    "PAZ", "COMUNHÃO", "BÍBLIA", "CRUZ", "LADAINHAS – SEQUÊNCIAS - PROCLAMAÇÕES", 
+    "MARIA", "PRECES"
+]
 
 def process_pdf_original(file, categoria_fixa=None):
     data = []
     current_n1 = categoria_fixa if categoria_fixa else "Sem Categoria"
     with pdfplumber.open(file) as pdf:
         progresso = st.progress(0)
+        total_pags = len(pdf.pages)
         for i, page in enumerate(pdf.pages):
             text = page.extract_text()
             if not text: continue
             for line in text.split('\n'):
                 t_limpo = line.strip()
                 if not t_limpo or "...." in t_limpo: continue
+                # Se não for categoria fixa, busca na lista clássica
                 if not categoria_fixa and t_limpo.upper() in CATEGORIAS_LITURGICOS:
                     current_n1 = t_limpo.upper()
-                elif re.match(r'^\d+\.', t_limpo):
+                    continue
+                # Identifica Hino (Nível 2)
+                if re.match(r'^\d+\.', t_limpo):
                     data.append({"n1": current_n1, "n2": t_limpo, "pag": i + 1})
-            progresso.progress((i + 1) / len(pdf.pages))
+            progresso.progress((i + 1) / total_pags)
     return data
 
 def save_to_db(data, origem):
-    # Deleta apenas os dados da aba correspondente
+    # Deleta apenas os dados da aba correspondente para não interferir na outra
     supabase.table("hinos_conteudos").delete().eq("origem", origem).execute()
     supabase.table("hinos_categorias").delete().eq("origem", origem).execute()
     
     categorias_presentes = sorted(list(set([item['n1'] for item in data])))
     for cat_nome in categorias_presentes:
-        res = supabase.table("hinos_categorias").insert({"nome_nivel1": cat_nome, "origem": origem}).execute()
+        res = supabase.table("hinos_categorias").insert({
+            "nome_nivel1": cat_nome, 
+            "origem": origem
+        }).execute()
+        
         if res.data:
-            cat_id = res.data[0]['id']
-            itens = [{"categoria_id": cat_id, "nome_nivel2": item['n2'], "texto_completo": str(item['pag']), "origem": origem} for item in data if item['n1'] == cat_nome]
+            # Captura ID (compatível com retorno lista ou objeto)
+            cat_id = res.data[0]['id'] if isinstance(res.data, list) else res.data['id']
+            itens = [
+                {
+                    "categoria_id": cat_id, 
+                    "nome_nivel2": item['n2'], 
+                    "texto_completo": str(item['pag']),
+                    "origem": origem
+                } for item in data if item['n1'] == cat_nome
+            ]
             if itens:
                 supabase.table("hinos_conteudos").insert(itens).execute()
 st.set_page_config(page_title="Hinário Litúrgico", layout="wide")
@@ -53,10 +76,11 @@ with tab1:
 
     with st.expander("⬆️ Sincronizar Hinos Litúrgicos"):
         up1 = st.file_uploader("PDF Litúrgico", type="pdf", key="u1")
-        if st.button("Sincronizar Litúrgicos", key="b1"):
+        if st.button("Sincronizar Litúrgicos", key="b1") and up1:
             bytes_pdf = up1.read()
             supabase.storage.from_(BUCKET).upload(path=NOME_STORAGE_LIT, file=bytes_pdf, file_options={"x-upsert": "true"})
             save_to_db(process_pdf_original(io.BytesIO(bytes_pdf)), "LITURGICO")
+            st.success("Hinário Litúrgico Sincronizado!")
             st.rerun()
 
     if pdf_lit:
@@ -67,7 +91,7 @@ with tab1:
             with c1:
                 sel_cat = st.selectbox("Categoria", df['nome_nivel1'], key="c1")
                 id_cat = int(df[df['nome_nivel1'] == sel_cat]['id'].iloc[0])
-            hinos = supabase.table("hinos_conteudos").select("*").eq("categoria_id", id_cat).execute().data
+            hinos = supabase.table("hinos_conteudos").select("*").eq("categoria_id", id_cat).eq("origem", "LITURGICO").execute().data
             if hinos:
                 h_ord = sorted(hinos, key=lambda x: int(re.search(r'\d+', x['nome_nivel2']).group()))
                 hino_sel = st.selectbox("Hino", [h['nome_nivel2'] for h in h_ord], key="h1")
@@ -79,8 +103,9 @@ with tab1:
                     y_ini = next((l['top'] for l in lines if hino_sel in l['text']), 0)
                     y_fim = page.height
                     for l in lines:
-                        if l['top'] > y_ini + 5 and (re.match(r'^\d+\.', l['text'].strip()) or l['text'].strip().upper() in CATEGORIAS_LITURGICOS):
-                            y_fim = l['top']; break
+                        if l['top'] > y_ini + 5:
+                            if re.match(r'^\d+\.', l['text'].strip()) or l['text'].strip().upper() in CATEGORIAS_LITURGICOS:
+                                y_fim = l['top']; break
                     img = page.crop((0, max(0, y_ini-10), page.width, y_fim)).to_image(resolution=200).original
                     st.image(img, use_container_width=True)
                     st.markdown("<style>img { cursor: zoom-in; }</style>", unsafe_allow_html=True)
@@ -94,17 +119,19 @@ with tab2:
 
     with st.expander("⬆️ Sincronizar Hinos Diversos"):
         up2 = st.file_uploader("PDF Diversos", type="pdf", key="u2")
-        if st.button("Sincronizar Diversos", key="b2"):
+        if st.button("Sincronizar Diversos", key="b2") and up2:
             bytes_pdf = up2.read()
             supabase.storage.from_(BUCKET).upload(path=NOME_STORAGE_DIV, file=bytes_pdf, file_options={"x-upsert": "true"})
+            # Forçamos a categoria fixa "HINOS DIVERSOS" para este arquivo
             save_to_db(process_pdf_original(io.BytesIO(bytes_pdf), "HINOS DIVERSOS"), "DIVERSOS")
+            st.success("Hinário Diversos Sincronizado!")
             st.rerun()
 
     if pdf_div:
         res_cat = supabase.table("hinos_categorias").select("*").eq("origem", "DIVERSOS").execute()
         if res_cat.data:
             id_cat = res_cat.data[0]['id']
-            hinos = supabase.table("hinos_conteudos").select("*").eq("categoria_id", id_cat).execute().data
+            hinos = supabase.table("hinos_conteudos").select("*").eq("categoria_id", id_cat).eq("origem", "DIVERSOS").execute().data
             if hinos:
                 h_ord = sorted(hinos, key=lambda x: int(re.search(r'\d+', x['nome_nivel2']).group()))
                 hino_sel = st.selectbox("Hino", [h['nome_nivel2'] for h in h_ord], key="h2")
@@ -118,5 +145,6 @@ with tab2:
                     for l in lines:
                         if l['top'] > y_ini + 5 and re.match(r'^\d+\.', l['text'].strip()):
                             y_fim = l['top']; break
-                    st.image(page.crop((0, max(0, y_ini-10), page.width, y_fim)).to_image(resolution=200).original, use_container_width=True)
+                    img = page.crop((0, max(0, y_ini-10), page.width, y_fim)).to_image(resolution=200).original
+                    st.image(img, use_container_width=True)
                     st.markdown("<style>img { cursor: zoom-in; }</style>", unsafe_allow_html=True)
