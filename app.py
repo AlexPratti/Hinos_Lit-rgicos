@@ -93,28 +93,33 @@ with st.expander("⬆️ Gerenciar e Upload de Arquivos"):
                 arq_obj = next(f for f in arquivos_carregados if f.name == escolhido)
                 file_bytes = arq_obj.read()
                 
-                # Envia o arquivo forçando a sobrescrita (upsert)
-                # O parâmetro 'x-upsert' em letras minúsculas e string "true" resolve o erro de duplicata
+                # ESTRATÉGIA SEGURA: Remover para depois subir (Evita erro de Duplicata/Update)
                 try:
-                    supabase.storage.from_(BUCKET).upload(
-                        path=NOME_STORAGE, 
-                        file=file_bytes, 
-                        file_options={"upsert": "true"}
-                    )
+                    # O remove espera uma lista de caminhos
+                    supabase.storage.from_(BUCKET).remove([NOME_STORAGE])
                 except Exception:
-                    # Caso o upload falhe por já existir, tentamos o método update
-                    supabase.storage.from_(BUCKET).update(
-                        path=NOME_STORAGE, 
-                        file=file_bytes
-                    )
+                    pass # Se o arquivo não existir, apenas ignora e segue
                 
+                # Upload do novo arquivo
+                try:
+                    res_storage = supabase.storage.from_(BUCKET).upload(
+                        path=NOME_STORAGE, 
+                        file=file_bytes,
+                        file_options={"cacheControl": "3600", "upsert": "true"}
+                    )
+                except Exception as e_storage:
+                    st.error(f"Erro no Storage: {e_storage}")
+                    st.stop()
+                
+                # Processamento e Banco de Dados
                 dados = process_pdf_adaptativo(io.BytesIO(file_bytes), doc_ativo)
                 if dados:
                     save_to_db(dados)
                     st.success(f"Arquivo sincronizado como {doc_ativo}!")
                     st.rerun()
                 else:
-                    st.error("Nenhum hino numerado encontrado.")
+                    st.error("Nenhum hino numerado encontrado no PDF.")
+
 
 
 try:
