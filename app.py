@@ -88,7 +88,7 @@ with st.expander("⬆️ Gerenciar e Upload de Arquivos"):
         lista_nomes = [f.name for f in arquivos_carregados]
         escolhido = st.selectbox("Escolha qual arquivo aplicar à opção selecionada no rádio:", lista_nomes)
         
-        if st.button(f"Sincronizar como {doc_ativo}"):
+        if st.button(f"Sincronizar"):
             with st.spinner("Processando..."):
                 arq_obj = next(f for f in arquivos_carregados if f.name == escolhido)
                 file_bytes = arq_obj.read()
