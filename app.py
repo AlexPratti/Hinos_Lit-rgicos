@@ -108,33 +108,33 @@ try:
                 if y_fim <= y_ini_crop: y_fim = page.height
                 
                 # RECORTE
-                img = page.crop((0, y_ini_crop, page.width, y_fim)).to_image(resolution=300).original
+                # Aumentamos para resolution=300 para o zoom não perder nitidez
+                img_obj = page.crop((0, y_ini_crop, page.width, y_fim)).to_image(resolution=300).original
                 
-                # Injetamos um script para forçar o navegador a permitir o zoom de pinça (pinch-to-zoom)
-                # E um CSS para garantir que a imagem seja tratada como um objeto ampliável
+                # Convertemos a imagem em bytes para poder exibi-la via HTML
+                import base64
+                from io import BytesIO
+                
+                buffered = BytesIO()
+                img_obj.save(buffered, format="PNG")
+                img_base64 = base64.b64encode(buffered.getvalue()).decode()
+
+                # EXIBIÇÃO COM ZOOM HABILITADO
+                # Usamos um container HTML que permite o zoom nativo do navegador
                 st.markdown(
-                    """
-                    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
-                    <style>
-                        /* Força a imagem a permitir interação */
-                        .stImage img {
-                            cursor: zoom-in;
-                            display: block;
-                            margin-left: auto;
-                            margin-right: auto;
-                        }
-                        /* Remove travas de estouro de tela que impedem o zoom no mobile */
-                        .main .block-container {
-                            overflow: visible !important;
-                        }
-                    </style>
+                    f"""
+                    <div style="width: 100%; overflow: auto;">
+                        <img src="data:image/png;base64,{img_base64}" 
+                             style="width: 100%; height: auto; cursor: zoom-in;" 
+                             onclick="window.open(this.src, '_blank');"
+                             title="Clique para abrir em tela cheia e dar zoom">
+                    </div>
+                    <p style="text-align: center; color: gray; font-size: 0.8rem;">
+                        Pressione o hino para ampliar ou use dois dedos para o zoom.
+                    </p>
                     """, 
                     unsafe_allow_html=True
                 )
-
-                # Exibimos a imagem
-                # A resolução 300 garante que, ao dar zoom, as letras não fiquem borradas
-                st.image(img, use_container_width=True)
 
     else:
         st.info("Aguardando PDF...")
