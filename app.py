@@ -108,32 +108,35 @@ try:
                 if y_fim <= y_ini_crop: y_fim = page.height
                 
                 # RECORTE
-                img = page.crop((0, y_ini_crop, page.width, y_fim)).to_image(resolution=200).original
+                img = page.crop((0, y_ini_crop, page.width, y_fim)).to_image(resolution=300).original
                 
-                # Exibição com suporte a zoom nativo do Streamlit (clique para ampliar)
-                # Aumentamos a resolução para 300 para garantir nitidez no zoom do celular
-                st.image(img, use_container_width=True)
-
-                # CSS para habilitar o comportamento de zoom do navegador e cursor
+                # Injetamos um script para forçar o navegador a permitir o zoom de pinça (pinch-to-zoom)
+                # E um CSS para garantir que a imagem seja tratada como um objeto ampliável
                 st.markdown(
                     """
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
                     <style>
-                    /* Permite que o usuário use o gesto de pinça de forma mais fluida na imagem */
-                    .stImage img {
-                        transition: transform .2s;
-                        cursor: zoom-in;
-                    }
-                    /* No mobile, garante que a imagem não seja cortada nas laterais */
-                    .main .block-container {
-                        padding-left: 1rem;
-                        padding-right: 1rem;
-                    }
+                        /* Força a imagem a permitir interação */
+                        .stImage img {
+                            cursor: zoom-in;
+                            display: block;
+                            margin-left: auto;
+                            margin-right: auto;
+                        }
+                        /* Remove travas de estouro de tela que impedem o zoom no mobile */
+                        .main .block-container {
+                            overflow: visible !important;
+                        }
                     </style>
                     """, 
                     unsafe_allow_html=True
                 )
+
+                # Exibimos a imagem
+                # A resolução 300 garante que, ao dar zoom, as letras não fiquem borradas
+                st.image(img, use_container_width=True)
+
     else:
         st.info("Aguardando PDF...")
 except Exception as e:
     st.error(f"Erro ao carregar: {e}")
-
