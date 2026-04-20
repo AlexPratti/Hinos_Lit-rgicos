@@ -7,19 +7,13 @@ import io
 
 # Conexão original
 supabase = create_client(st.secrets["URL_SUPABASE"], st.secrets["KEY_SUPABASE"])
-BUCKET = "hinarios"
+BUCKET, FILE_PATH = "hinarios", "hinario_atual.pdf"
 
-# Lista fiel para o Hinário Litúrgico
-CATEGORIAS_LITURGICOS = [
-    "ORANTES", "INICIAIS E FINAIS", "PERDÃO", "GLÓRIA", "DEUS NOS FALA", 
-    "SALMO", "ACLAMAÇÃO", "OFERTÓRIO", "LOUVOR", "SANTO", "CORDEIRO", 
-    "PAZ", "COMUNHÃO", "BÍBLIA", "CRUZ", "LADAINHAS – SEQUÊNCIAS - PROCLAMAÇÕES", 
-    "MARIA", "PRECES"
-]
+CATEGORIAS_ALVO = ["ORANTES", "INICIAIS E FINAIS", "PERDÃO", "GLÓRIA", "DEUS NOS FALA", "SALMO", "ACLAMAÇÃO", "OFERTÓRIO", "LOUVOR", "SANTO", "CORDEIRO", "PAZ", "COMUNHÃO", "BÍBLIA", "CRUZ", "LADAINHAS – SEQUÊNCIAS - PROCLAMAÇÕES", "MARIA", "PRECES"]
 
-def process_pdf_original(file, categoria_fixa=None):
+def process_pdf_simple(file):
     data = []
-    current_n1 = categoria_fixa if categoria_fixa else "Sem Categoria"
+    current_n1 = "Sem Categoria"
     with pdfplumber.open(file) as pdf:
         progresso = st.progress(0)
         total_pags = len(pdf.pages)
@@ -28,123 +22,121 @@ def process_pdf_original(file, categoria_fixa=None):
             if not text: continue
             for line in text.split('\n'):
                 t_limpo = line.strip()
-                if not t_limpo or "...." in t_limpo: continue
-                # Se não for categoria fixa, busca na lista clássica
-                if not categoria_fixa and t_limpo.upper() in CATEGORIAS_LITURGICOS:
+                if t_limpo.upper() in CATEGORIAS_ALVO:
                     current_n1 = t_limpo.upper()
-                    continue
-                # Identifica Hino (Nível 2)
-                if re.match(r'^\d+\.', t_limpo):
+                elif re.match(r'^\d+\.', t_limpo):
                     data.append({"n1": current_n1, "n2": t_limpo, "pag": i + 1})
             progresso.progress((i + 1) / total_pags)
     return data
 
-def save_to_db(data, origem):
-    # Deleta apenas os dados da aba correspondente para não interferir na outra
-    supabase.table("hinos_conteudos").delete().eq("origem", origem).execute()
-    supabase.table("hinos_categorias").delete().eq("origem", origem).execute()
-    
-    categorias_presentes = sorted(list(set([item['n1'] for item in data])))
-    for cat_nome in categorias_presentes:
-        res = supabase.table("hinos_categorias").insert({
-            "nome_nivel1": cat_nome, 
-            "origem": origem
-        }).execute()
-        
+def save_to_db(data):
+    supabase.table("hinos_conteudos").delete().neq("id", 0).execute()
+    supabase.table("hinos_categorias").delete().neq("id", 0).execute()
+    for cat in CATEGORIAS_ALVO:
+        res = supabase.table("hinos_categorias").insert({"nome_nivel1": cat}).execute()
         if res.data:
-            # Captura ID (compatível com retorno lista ou objeto)
-            cat_id = res.data[0]['id'] if isinstance(res.data, list) else res.data['id']
-            itens = [
-                {
-                    "categoria_id": cat_id, 
-                    "nome_nivel2": item['n2'], 
-                    "texto_completo": str(item['pag']),
-                    "origem": origem
-                } for item in data if item['n1'] == cat_nome
-            ]
-            if itens:
-                supabase.table("hinos_conteudos").insert(itens).execute()
-st.set_page_config(page_title="Hinário Litúrgico", layout="wide")
-tab1, tab2 = st.tabs(["📖 HINOS LITÚRGICOS", "🎸 HINOS DIVERSOS"])
+            cat_id = res.data[0]['id']
+            itens = [{"categoria_id": cat_id, "nome_nivel2": item['n2'], "texto_completo": str(item['pag'])} for item in data if item['n1'] == cat]
+            if itens: supabase.table("hinos_conteudos").insert(itens).execute()
+# --- INTERFACE ---
+st.set_page_config(page_title="Hinário Visual", layout="wide")
 
-# --- ABA 1: HINOS LITÚRGICOS ---
-with tab1:
-    NOME_STORAGE_LIT = "HINOS_LITURGICOS.pdf"
-    try:
-        pdf_lit = io.BytesIO(supabase.storage.from_(BUCKET).download(NOME_STORAGE_LIT))
-    except: pdf_lit = None
+try:
+    pdf_res = supabase.storage.from_(BUCKET).download(FILE_PATH)
+    arquivo_persistente = io.BytesIO(pdf_res)
+except: arquivo_persistente = None
 
-    with st.expander("⬆️ Sincronizar Hinos Litúrgicos"):
-        up1 = st.file_uploader("PDF Litúrgico", type="pdf", key="u1")
-        if st.button("Sincronizar Litúrgicos", key="b1") and up1:
-            bytes_pdf = up1.read()
-            supabase.storage.from_(BUCKET).upload(path=NOME_STORAGE_LIT, file=bytes_pdf, file_options={"x-upsert": "true"})
-            save_to_db(process_pdf_original(io.BytesIO(bytes_pdf)), "LITURGICO")
-            st.success("Hinário Litúrgico Sincronizado!")
-            st.rerun()
+with st.expander("⬆️ Upload PDF"):
+    novo = st.file_uploader("Selecione o arquivo", type="pdf")
+    if st.button("Atualizar Banco") and novo:
+        bytes_pdf = novo.read()
+        supabase.storage.from_(BUCKET).upload(path=FILE_PATH, file=bytes_pdf, file_options={"x-upsert": "true"})
+        dados = process_pdf_simple(io.BytesIO(bytes_pdf))
+        save_to_db(dados)
+        st.success("Sincronizado!")
+        st.rerun()
 
-    if pdf_lit:
-        res_cat = supabase.table("hinos_categorias").select("*").eq("origem", "LITURGICO").order("nome_nivel1").execute()
-        if res_cat.data:
-            df = pd.DataFrame(res_cat.data)
-            c1, c2 = st.columns(2)
-            with c1:
-                sel_cat = st.selectbox("Categoria", df['nome_nivel1'], key="c1")
-                id_cat = int(df[df['nome_nivel1'] == sel_cat]['id'].iloc[0])
-            hinos = supabase.table("hinos_conteudos").select("*").eq("categoria_id", id_cat).eq("origem", "LITURGICO").execute().data
-            if hinos:
-                h_ord = sorted(hinos, key=lambda x: int(re.search(r'\d+', x['nome_nivel2']).group()))
-                hino_sel = st.selectbox("Hino", [h['nome_nivel2'] for h in h_ord], key="h1")
-                item = next(h for h in hinos if h['nome_nivel2'] == hino_sel)
-                p_num = int(item['texto_completo'])
-                with pdfplumber.open(pdf_lit) as pdf:
-                    page = pdf.pages[p_num - 1]
-                    lines = page.extract_text_lines()
-                    y_ini = next((l['top'] for l in lines if hino_sel in l['text']), 0)
-                    y_fim = page.height
-                    for l in lines:
-                        if l['top'] > y_ini + 5:
-                            if re.match(r'^\d+\.', l['text'].strip()) or l['text'].strip().upper() in CATEGORIAS_LITURGICOS:
-                                y_fim = l['top']; break
-                    img = page.crop((0, max(0, y_ini-10), page.width, y_fim)).to_image(resolution=200).original
-                    st.image(img, use_container_width=True)
-                    st.markdown("<style>img { cursor: zoom-in; }</style>", unsafe_allow_html=True)
+try:
+    res_cat = supabase.table("hinos_categorias").select("*").order("nome_nivel1").execute()
+    if res_cat.data and arquivo_persistente:
+        df_cat = pd.DataFrame(res_cat.data)
+        c1, c2 = st.columns(2)
+        with c1:
+            escolha_n1 = st.selectbox("Categoria", df_cat['nome_nivel1'], key="cat")
+            id_n1 = int(df_cat[df_cat['nome_nivel1'] == escolha_n1]['id'].iloc[0])
+        
+        hinos = supabase.table("hinos_conteudos").select("*").eq("categoria_id", id_n1).execute().data
+        if hinos:
+            hinos_ord = sorted(hinos, key=lambda x: int(re.search(r'\d+', x['nome_nivel2']).group()))
+            titulos_lista = [h['nome_nivel2'] for h in hinos_ord]
+            hino_sel = st.selectbox("Hino", titulos_lista, key=f"h_{escolha_n1}")
+            
+            item_db = next(h for h in hinos if h['nome_nivel2'] == hino_sel)
+            p_num = int(item_db['texto_completo'])
 
-# --- ABA 2: HINOS DIVERSOS ---
-with tab2:
-    NOME_STORAGE_DIV = "HINOS_DIVERSOS.pdf"
-    try:
-        pdf_div = io.BytesIO(supabase.storage.from_(BUCKET).download(NOME_STORAGE_DIV))
-    except: pdf_div = None
+            st.divider()
+            with pdfplumber.open(arquivo_persistente) as pdf:
+                page = pdf.pages[p_num - 1]
+                # Pegamos as linhas com as coordenadas corretas
+                text_lines = page.extract_text_lines()
+                
+                y_ini = 0
+                y_fim = page.height
 
-    with st.expander("⬆️ Sincronizar Hinos Diversos"):
-        up2 = st.file_uploader("PDF Diversos", type="pdf", key="u2")
-        if st.button("Sincronizar Diversos", key="b2") and up2:
-            bytes_pdf = up2.read()
-            supabase.storage.from_(BUCKET).upload(path=NOME_STORAGE_DIV, file=bytes_pdf, file_options={"x-upsert": "true"})
-            # Forçamos a categoria fixa "HINOS DIVERSOS" para este arquivo
-            save_to_db(process_pdf_original(io.BytesIO(bytes_pdf), "HINOS DIVERSOS"), "DIVERSOS")
-            st.success("Hinário Diversos Sincronizado!")
-            st.rerun()
+                # PASSO 1: Localiza o y_ini (Início) comparando o texto selecionado
+                for line in text_lines:
+                    if hino_sel in line['text']:
+                        y_ini = line['top']
+                        break
+                
+                # PASSO 2: Localiza o y_fim (Fim) procurando o próximo hino ou categoria abaixo de y_ini
+                for line in text_lines:
+                    # Só avaliamos linhas que estão abaixo do início do hino selecionado
+                    if line['top'] > y_ini + 5:
+                        conteudo_linha = line['text'].strip()
+                        # Se for um título de hino (começa com número)
+                        if re.match(r'^\d+\.', conteudo_linha):
+                            y_fim = line['top']
+                            break
+                        # Se for uma categoria alvo
+                        if conteudo_linha.upper() in CATEGORIAS_ALVO:
+                            y_fim = line['top']
+                            break
 
-    if pdf_div:
-        res_cat = supabase.table("hinos_categorias").select("*").eq("origem", "DIVERSOS").execute()
-        if res_cat.data:
-            id_cat = res_cat.data[0]['id']
-            hinos = supabase.table("hinos_conteudos").select("*").eq("categoria_id", id_cat).eq("origem", "DIVERSOS").execute().data
-            if hinos:
-                h_ord = sorted(hinos, key=lambda x: int(re.search(r'\d+', x['nome_nivel2']).group()))
-                hino_sel = st.selectbox("Hino", [h['nome_nivel2'] for h in h_ord], key="h2")
-                item = next(h for h in hinos if h['nome_nivel2'] == hino_sel)
-                p_num = int(item['texto_completo'])
-                with pdfplumber.open(pdf_div) as pdf:
-                    page = pdf.pages[p_num - 1]
-                    lines = page.extract_text_lines()
-                    y_ini = next((l['top'] for l in lines if hino_sel in l['text']), 0)
-                    y_fim = page.height
-                    for l in lines:
-                        if l['top'] > y_ini + 5 and re.match(r'^\d+\.', l['text'].strip()):
-                            y_fim = l['top']; break
-                    img = page.crop((0, max(0, y_ini-10), page.width, y_fim)).to_image(resolution=200).original
-                    st.image(img, use_container_width=True)
-                    st.markdown("<style>img { cursor: zoom-in; }</style>", unsafe_allow_html=True)
+                # AJUSTE FINAL: Margem de segurança e validação de altura
+                y_ini_crop = max(0, y_ini - 10)
+                if y_fim <= y_ini_crop: y_fim = page.height
+                
+                # RECORTE
+                # Aumentamos para resolution=300 para o zoom não perder nitidez
+                img_obj = page.crop((0, y_ini_crop, page.width, y_fim)).to_image(resolution=300).original
+                
+                # Convertemos a imagem em bytes para poder exibi-la via HTML
+                import base64
+                from io import BytesIO
+                
+                buffered = BytesIO()
+                img_obj.save(buffered, format="PNG")
+                img_base64 = base64.b64encode(buffered.getvalue()).decode()
+
+                # EXIBIÇÃO COM ZOOM HABILITADO
+                # Usamos um container HTML que permite o zoom nativo do navegador
+                st.markdown(
+                    f"""
+                    <div style="width: 100%; overflow: auto;">
+                        <img src="data:image/png;base64,{img_base64}" 
+                             style="width: 100%; height: auto; cursor: zoom-in;" 
+                             onclick="window.open(this.src, '_blank');"
+                             title="Clique para abrir em tela cheia e dar zoom">
+                    </div>
+                    <p style="text-align: center; color: gray; font-size: 0.8rem;">
+                        Se estiver no celular pressione o hino e compartilhe para usar o zoom.
+                    </p>
+                    """, 
+                    unsafe_allow_html=True
+                )
+
+    else:
+        st.info("Aguardando PDF...")
+except Exception as e:
+    st.error(f"Erro ao carregar: {e}")
