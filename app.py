@@ -5,7 +5,7 @@ from supabase import create_client
 import pandas as pd
 import io
 
-# Conexão original mantida
+# Conexão original
 supabase = create_client(st.secrets["URL_SUPABASE"], st.secrets["KEY_SUPABASE"])
 BUCKET, FILE_PATH = "hinarios", "hinario_atual.pdf"
 
@@ -36,7 +36,6 @@ def save_to_db(data):
         res = supabase.table("hinos_categorias").insert({"nome_nivel1": cat}).execute()
         if res.data:
             cat_id = res.data[0]['id']
-            # Salvamos apenas a página no texto_completo para simplificar a busca do crop
             itens = [{"categoria_id": cat_id, "nome_nivel2": item['n2'], "texto_completo": str(item['pag'])} for item in data if item['n1'] == cat]
             if itens: supabase.table("hinos_conteudos").insert(itens).execute()
 # --- INTERFACE ---
@@ -68,12 +67,10 @@ try:
         
         hinos = supabase.table("hinos_conteudos").select("*").eq("categoria_id", id_n1).execute().data
         if hinos:
-            # Sua ordenação numérica original
             hinos_ord = sorted(hinos, key=lambda x: int(re.search(r'\d+', x['nome_nivel2']).group()))
             titulos_lista = [h['nome_nivel2'] for h in hinos_ord]
             hino_sel = st.selectbox("Hino", titulos_lista, key=f"h_{escolha_n1}")
             
-            # DETERMINAÇÃO DO INÍCIO E FIM PARA O CROP
             idx_atual = titulos_lista.index(hino_sel)
             proximo_titulo = titulos_lista[idx_atual + 1] if idx_atual + 1 < len(titulos_lista) else None
 
@@ -85,22 +82,26 @@ try:
                 page = pdf.pages[p_num - 1]
                 words = page.extract_words()
 
-                # 1. Busca o Início (y_ini): baseado exatamente no hino selecionado
-                num_selecionado = hino_sel.split()[0] # ex: "2."
-                y_ini = next((w['top'] for w in words if w == num_selecionado), 0)
+                # Busca Início (y_ini)
+                num_sel = hino_sel.split()[0]
+                y_ini = next((w['top'] for w in words if w == num_sel), 0)
+                
+                # Proteção: Garante que a margem superior não seja negativa
+                y_crop_inicio = max(0, y_ini - 10)
 
-                # 2. Busca o Fim (y_fim): baseado no próximo hino da lista
+                # Busca Fim (y_fim)
                 y_fim = page.height
                 if proximo_titulo:
-                    num_proximo = proximo_titulo.split()[0] # ex: "3."
-                    # Só corta na mesma página se o próximo hino estiver nela
-                    y_fim = next((w['top'] for w in words if w == num_proximo), page.height)
+                    num_prox = proximo_titulo.split()[0]
+                    y_fim_detectado = next((w['top'] for w in words if w == num_prox), page.height)
+                    # Só usa o y_fim se ele estiver na mesma página e for maior que o início
+                    if y_fim_detectado > y_ini:
+                        y_fim = y_fim_detectado - 5
                 
-                # 3. Executa o Recorte
-                if y_fim <= y_ini: y_fim = page.height
-                img = page.crop((0, y_ini - 10, page.width, y_fim - 5)).to_image(resolution=200).original
-                st.image(img, use_container_width=True)
+                # Executa o Crop Final com segurança
+                recorte = page.crop((0, y_crop_inicio, page.width, y_fim))
+                st.image(recorte.to_image(resolution=200).original, use_container_width=True)
     else:
         st.info("Aguardando PDF...")
 except Exception as e:
-    st.error(f"Erro: {e}")
+    st.error(f"Selecione uma categoria válida para carregar os hinos.")
