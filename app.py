@@ -16,7 +16,6 @@ def process_pdf_simple(file):
     current_n1 = "Sem Categoria"
     with pdfplumber.open(file) as pdf:
         progresso = st.progress(0)
-        total_pags = len(pdf.pages)
         for i, page in enumerate(pdf.pages):
             text = page.extract_text()
             if not text: continue
@@ -26,7 +25,7 @@ def process_pdf_simple(file):
                     current_n1 = t_limpo.upper()
                 elif re.match(r'^\d+\.', t_limpo):
                     data.append({"n1": current_n1, "n2": t_limpo, "pag": i + 1})
-            progresso.progress((i + 1) / total_pags)
+            progresso.progress((i + 1) / len(pdf.pages))
     return data
 
 def save_to_db(data):
@@ -71,37 +70,48 @@ try:
             titulos_lista = [h['nome_nivel2'] for h in hinos_ord]
             hino_sel = st.selectbox("Hino", titulos_lista, key=f"h_{escolha_n1}")
             
-            idx_atual = titulos_lista.index(hino_sel)
-            proximo_titulo = titulos_lista[idx_atual + 1] if idx_atual + 1 < len(titulos_lista) else None
-
+            # Buscamos a página do hino selecionado no banco
             item_db = next(h for h in hinos if h['nome_nivel2'] == hino_sel)
             p_num = int(item_db['texto_completo'])
 
             st.divider()
             with pdfplumber.open(arquivo_persistente) as pdf:
                 page = pdf.pages[p_num - 1]
-                words = page.extract_words()
-
-                # Busca Início (y_ini)
-                num_sel = hino_sel.split()[0]
-                y_ini = next((w['top'] for w in words if w == num_sel), 0)
+                # Extraímos as linhas com objetos de texto para pegar o 'top' (y) de cada linha
+                text_objects = page.extract_text_lines()
                 
-                # Proteção: Garante que a margem superior não seja negativa
-                y_crop_inicio = max(0, y_ini - 10)
-
-                # Busca Fim (y_fim)
+                y_ini = 0
                 y_fim = page.height
-                if proximo_titulo:
-                    num_prox = proximo_titulo.split()[0]
-                    y_fim_detectado = next((w['top'] for w in words if w == num_prox), page.height)
-                    # Só usa o y_fim se ele estiver na mesma página e for maior que o início
-                    if y_fim_detectado > y_ini:
-                        y_fim = y_fim_detectado - 5
+
+                # PASSO 1: Identificar o INÍCIO (y_ini) baseado na seleção exata
+                for obj in text_objects:
+                    if hino_sel in obj:
+                        y_ini = obj['top']
+                        break
                 
-                # Executa o Crop Final com segurança
-                recorte = page.crop((0, y_crop_inicio, page.width, y_fim))
+                # PASSO 2: Identificar o FIM (y_fim) baseado no PRÓXIMO TÍTULO ou CATEGORIA
+                # Começamos a busca a partir da linha após o y_ini
+                for obj in text_objects:
+                    if obj['top'] > y_ini:
+                        # Se encontrar uma linha que começa com número e ponto (Próximo hino)
+                        if re.match(r'^\d+\.', obj.strip()):
+                            y_fim = obj['top']
+                            break
+                        # Ou se encontrar o nome de uma categoria alvo
+                        if obj.strip().upper() in CATEGORIAS_ALVO:
+                            y_fim = obj['top']
+                            break
+
+                # AJUSTE DE MARGEM: Pequeno respiro para não cortar a letra
+                y_ini_final = max(0, y_ini - 10)
+                y_fim_final = y_fim - 5 if y_fim < page.height else page.height
+
+                # PASSO 3: Executa o Crop Final
+                if y_fim_final <= y_ini_final: y_fim_final = page.height
+                
+                recorte = page.crop((0, y_ini_final, page.width, y_fim_final))
                 st.image(recorte.to_image(resolution=200).original, use_container_width=True)
     else:
         st.info("Aguardando PDF...")
 except Exception as e:
-    st.error(f"Selecione uma categoria válida para carregar os hinos.")
+    st.error(f"Selecione uma categoria válida. (Erro: {e})")
