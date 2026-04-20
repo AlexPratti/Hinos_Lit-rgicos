@@ -30,18 +30,30 @@ def process_pdf_adaptativo(file, tipo_selecionado):
         progresso = st.progress(0)
         total_pags = len(pdf.pages)
         for i, page in enumerate(pdf.pages):
-            text = page.extract_text()
+            # Usamos layout=True para garantir que o texto venha na ordem visual correta
+            text = page.extract_text(layout=True)
             if not text: continue
+            
             for line in text.split('\n'):
                 t_limpo = line.strip()
                 if not t_limpo: continue
                 
+                # Identifica Categorias
                 if t_limpo.upper() in categorias_permitidas:
                     current_n1 = t_limpo.upper()
-                elif re.match(r'^\d+\.', t_limpo):
+                    continue
+
+                # REGEX REFORÇADA: 
+                # ^\s* -> espaços opcionais no início
+                # \d+   -> um ou mais números
+                # [\.\s\)-] -> seguidos de ponto, espaço, parênteses ou traço
+                # (ex: "1.", "1 ", "1-", "1)")
+                if re.match(r'^\s*\d+[\.\s\)-]', t_limpo):
                     data.append({"n1": current_n1, "n2": t_limpo, "pag": i + 1})
+            
             progresso.progress((i + 1) / total_pags)
     return data
+
 
 def save_to_db(data):
     # 1. Limpeza total para refletir apenas o arquivo ativo
