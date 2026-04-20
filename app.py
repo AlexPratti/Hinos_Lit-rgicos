@@ -5,7 +5,7 @@ from supabase import create_client
 import pandas as pd
 import io
 
-# Conexão original mantida
+# Conexão original
 supabase = create_client(st.secrets["URL_SUPABASE"], st.secrets["KEY_SUPABASE"])
 BUCKET = "hinarios"
 
@@ -13,8 +13,6 @@ CATEGORIAS_LITURGICOS = ["ORANTES", "INICIAIS E FINAIS", "PERDÃO", "GLÓRIA", "
 
 def process_pdf_adaptativo(file, tipo_selecionado):
     data = []
-    
-    # LÓGICA RIGOROSA DE CATEGORIA
     if "DIVERSOS" in tipo_selecionado.upper():
         current_n1 = "HINOS DIVERSOS"
         modo_diversos = True
@@ -28,99 +26,63 @@ def process_pdf_adaptativo(file, tipo_selecionado):
         for i, page in enumerate(pdf.pages):
             text = page.extract_text()
             if not text: continue
-            
             for line in text.split('\n'):
                 t_limpo = line.strip()
-                
-                # Ignora linhas vazias, números de página isolados ou linhas de sumário (pontilhados)
-                if not t_limpo or t_limpo.isdigit() or "...." in t_limpo:
+                if not t_limpo or t_limpo.isdigit() or "...." in t_limpo: continue
+                if not modo_diversos and t_limpo.upper() in CATEGORIAS_LITURGICOS:
+                    current_n1 = t_limpo.upper()
                     continue
-                
-                # Se não for o modo DIVERSOS, busca as categorias da lista alvo
-                if not modo_diversos:
-                    if t_limpo.upper() in CATEGORIAS_LITURGICOS:
-                        current_n1 = t_limpo.upper()
-                        continue
-
-                # Identifica Hinos (Nível 2) - Exige Número + Ponto + Espaço
-                # O limite de 100 caracteres impede que estrofes do hino virem títulos
                 if re.match(r'^\d+\.\s', t_limpo) and len(t_limpo) < 100:
                     data.append({"n1": current_n1, "n2": t_limpo, "pag": i + 1})
-            
             progresso.progress((i + 1) / total_pags)
     return data
 
 def save_to_db(data):
-    # Limpeza total para garantir que não sobrem categorias do arquivo anterior
     supabase.table("hinos_conteudos").delete().neq("id", 0).execute()
     supabase.table("hinos_categorias").delete().neq("id", 0).execute()
-    
     categorias_presentes = sorted(list(set([item['n1'] for item in data])))
     for cat_nome in categorias_presentes:
         res = supabase.table("hinos_categorias").insert({"nome_nivel1": cat_nome}).execute()
         if res.data:
-            # Pega o ID (Garante compatibilidade com retorno em lista ou objeto)
-            cat_id = res.data[0]['id'] if isinstance(res.data, list) else res.data['id']
-            
-            itens = [
-                {"categoria_id": cat_id, "nome_nivel2": item['n2'], "texto_completo": str(item['pag'])} 
-                for item in data if item['n1'] == cat_nome
-            ]
-            if itens:
-                supabase.table("hinos_conteudos").insert(itens).execute()
-# --- INTERFACE ---
+            cat_id = res.data[0]['id']
+            itens = [{"categoria_id": cat_id, "nome_nivel2": item['n2'], "texto_completo": str(item['pag'])} for item in data if item['n1'] == cat_nome]
+            if itens: supabase.table("hinos_conteudos").insert(itens).execute()
 st.set_page_config(page_title="Hinário Visual", layout="wide")
-
 st.subheader("📖 Seleção de Hinário")
+
 doc_ativo = st.radio("Qual arquivo deseja visualizar ou atualizar?", ["HINOS LITÚRGICOS", "HINOS DIVERSOS"], horizontal=True)
 
-NOME_STORAGE = "HINOS LITÚRGICOS.pdf" if doc_ativo == "HINOS LITÚRGICOS" else "HINOS DIVERSOS.pdf"
+# CORREÇÃO: Nomes sem espaços e sem acentos para o Storage (Evita o erro InvalidKey)
+NOME_STORAGE = "hinos_liturgicos.pdf" if doc_ativo == "HINOS LITÚRGICOS" else "hinos_diversos.pdf"
 
 try:
     res_storage = supabase.storage.from_(BUCKET).download(NOME_STORAGE)
     arquivo_persistente = io.BytesIO(res_storage)
-except:
-    arquivo_persistente = None
+except: arquivo_persistente = None
 
 with st.expander("⬆️ Gerenciar e Upload de Arquivos"):
     arquivos_carregados = st.file_uploader("Arraste seus PDFs aqui", type="pdf", accept_multiple_files=True)
     if arquivos_carregados:
         lista_nomes = [f.name for f in arquivos_carregados]
-        escolhido = st.selectbox("Escolha qual arquivo aplicar à opção selecionada no rádio:", lista_nomes)
+        escolhido = st.selectbox("Escolha qual arquivo aplicar ao rádio selecionado:", lista_nomes)
         
         if st.button("Sincronizar"):
-            with st.spinner("Processando..."):
+            with st.spinner("Sincronizando..."):
                 arq_obj = next(f for f in arquivos_carregados if f.name == escolhido)
                 file_bytes = arq_obj.read()
                 
-                # ESTRATÉGIA SEGURA: Remover para depois subir (Evita erro de Duplicata/Update)
-                try:
-                    # O remove espera uma lista de caminhos
-                    supabase.storage.from_(BUCKET).remove([NOME_STORAGE])
-                except Exception:
-                    pass # Se o arquivo não existir, apenas ignora e segue
+                # Remove e sobe com nome limpo
+                try: supabase.storage.from_(BUCKET).remove([NOME_STORAGE])
+                except: pass
                 
-                # Upload do novo arquivo
-                try:
-                    res_storage = supabase.storage.from_(BUCKET).upload(
-                        path=NOME_STORAGE, 
-                        file=file_bytes,
-                        file_options={"cacheControl": "3600", "upsert": "true"}
-                    )
-                except Exception as e_storage:
-                    st.error(f"Erro no Storage: {e_storage}")
-                    st.stop()
+                up_res = supabase.storage.from_(BUCKET).upload(path=NOME_STORAGE, file=file_bytes)
                 
-                # Processamento e Banco de Dados
                 dados = process_pdf_adaptativo(io.BytesIO(file_bytes), doc_ativo)
                 if dados:
                     save_to_db(dados)
-                    st.success(f"Arquivo sincronizado como {doc_ativo}!")
+                    st.success(f"Sincronizado como {doc_ativo}!")
                     st.rerun()
-                else:
-                    st.error("Nenhum hino numerado encontrado no PDF.")
-
-
+                else: st.error("Nenhum hino encontrado.")
 
 try:
     res_cat = supabase.table("hinos_categorias").select("*").order("nome_nivel1").execute()
@@ -131,29 +93,24 @@ try:
             escolha_n1 = st.selectbox("Categoria", df_cat['nome_nivel1'], key=f"cat_{doc_ativo}")
             id_n1 = int(df_cat[df_cat['nome_nivel1'] == escolha_n1]['id'].iloc[0])
         
-        res_hinos = supabase.table("hinos_conteudos").select("*").eq("categoria_id", id_n1).execute().data
-        if res_hinos:
-            hinos_ord = sorted(res_hinos, key=lambda x: int(re.search(r'\d+', x['nome_nivel2']).group()))
-            hino_sel = st.selectbox("Escolha o Hino:", [h['nome_nivel2'] for h in hinos_ord], key=f"h_{escolha_n1}_{doc_ativo}")
+        hinos = supabase.table("hinos_conteudos").select("*").eq("categoria_id", id_n1).execute().data
+        if hinos:
+            hinos_ord = sorted(hinos, key=lambda x: int(re.search(r'\d+', x['nome_nivel2']).group()))
+            hino_sel = st.selectbox("Hino:", [h['nome_nivel2'] for h in hinos_ord], key=f"h_{escolha_n1}_{doc_ativo}")
             
-            p_num = int(next(h for h in res_hinos if h['nome_nivel2'] == hino_sel)['texto_completo'])
-            
-            st.divider()
+            p_num = int(next(h for h in hinos if h['nome_nivel2'] == hino_sel)['texto_completo'])
             with pdfplumber.open(arquivo_persistente) as pdf:
                 page = pdf.pages[p_num - 1]
+                # Coordenadas com fallback para não travar
                 text_lines = page.extract_text_lines()
                 y_ini = next((l['top'] for l in text_lines if hino_sel in l['text']), 0)
                 y_fim = page.height
-                
-                bloqueio = CATEGORIAS_LITURGICOS + ["HINOS DIVERSOS"]
                 for l in text_lines:
                     if l['top'] > y_ini + 5:
                         txt = l['text'].strip()
-                        if re.match(r'^\d+\.', txt) or txt.upper() in bloqueio:
+                        if re.match(r'^\d+\.', txt) or txt.upper() in (CATEGORIAS_LITURGICOS + ["HINOS DIVERSOS"]):
                             y_fim = l['top']
                             break
-                img = page.crop((0, max(0, y_ini - 10), page.width, y_fim)).to_image(resolution=200).original
-                st.image(img, use_container_width=True)
+                st.image(page.crop((0, max(0, y_ini - 10), page.width, y_fim)).to_image(resolution=200).original, use_container_width=True)
     else: st.info(f"O hinário '{doc_ativo}' não possui dados sincronizados.")
-except Exception as e: st.error(f"Aguardando... {e}")
-
+except Exception as e: st.error(f"Erro: {e}")
