@@ -24,7 +24,8 @@ def process_pdf_simple(file):
                 t_limpo = line.strip()
                 if t_limpo.upper() in CATEGORIAS_ALVO:
                     current_n1 = t_limpo.upper()
-                elif re.match(r'^\d+\.', t_limpo):
+                # Ajuste aqui: verifica se começa com número e se o texto é idêntico ao seu formato em maiúsculo
+                elif re.match(r'^\d+\.', t_limpo) and t_limpo == t_limpo.upper():
                     data.append({"n1": current_n1, "n2": t_limpo, "pag": i + 1})
             progresso.progress((i + 1) / total_pags)
     return data
