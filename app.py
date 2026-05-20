@@ -166,29 +166,13 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                             "Diminuir 2 Tons (-4)": -4, "Diminuir 2½ Tons (-5)": -5, "Diminuir 3 Tons (-6)": -6
                         }
                         
-                        # --- MONITORAMENTO DE MUDANÇA DE HINO (RESET AUTOMÁTICO) ---
-                        # Se o hino atual na tela for diferente do hino guardado no histórico do state,
-                        # mudamos o índice padrão do selectbox de volta para 0 ("Original")
-                        if "ultimo_hino_carregado" not in st.session_state:
-                            st.session_state["ultimo_hino_carregado"] = sel_hino
-                            st.session_state["indice_tom_atual"] = 0
-                            
-                        if st.session_state["ultimo_hino_carregado"] != sel_hino:
-                            st.session_state["ultimo_hino_carregado"] = sel_hino
-                            st.session_state["indice_tom_atual"] = 0
-                        
-                        # Callback para salvar a nova escolha caso o usuário altere manualmente o tom
-                        def salvar_mudanca_tom():
-                            lista_tons = list(opcoes_tons.keys())
-                            if st.session_state["seletor_tom"] in lista_tons:
-                                st.session_state["indice_tom_atual"] = lista_tons.index(st.session_state["seletor_tom"])
-
+                        # SOLUÇÃO COM KEY DINÂMICA: Atrelando o nome do hino à key do selectbox,
+                        # o Streamlit reseta o componente para o index=0 ("Original") imediatamente ao trocar de música
                         tom_selecionado = st.selectbox(
                             "Selecione o novo tom para readequar as cifras:", 
                             list(opcoes_tons.keys()), 
-                            index=st.session_state["indice_tom_atual"],
-                            key="seletor_tom",
-                            on_change=salvar_mudanca_tom
+                            index=0,
+                            key=f"seletor_tom_{sel_hino}"
                         )
                         deslocamento_semitons = opcoes_tons[tom_selecionado]
                         
