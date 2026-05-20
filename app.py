@@ -86,9 +86,8 @@ def limpar_cifras_docx(file):
 
 # --- LÓGICA DE TRANSPOSIÇÃO DE TOM DE CIFRAS ---
 def transpor_acorde(acorde, semitons):
-    if not acorde:
+    if not acorde or semitons == 0:
         return acorde
-    # Casos especiais de barras (ex: G/B)
     if '/' in acorde:
         partes = acorde.split('/')
         return f"{transpor_acorde(partes[0], semitons)}/{transpor_acorde(partes[1], semitons)}"
@@ -98,7 +97,6 @@ def transpor_acorde(acorde, semitons):
         return acorde
     nota_fundamental, complemento = match.groups()
     
-    # Padronização de bemóis para sustenidos para equivalência na lista
     conversao_bemol = {"Db": "C#", "Eb": "D#", "Gb": "F#", "Ab": "G#", "Bb": "A#"}
     if nota_fundamental in conversao_bemol:
         nota_fundamental = conversao_bemol[nota_fundamental]
@@ -108,6 +106,59 @@ def transpor_acorde(acorde, semitons):
         novo_idx = (idx_atual + semitons) % 12
         return NOTAS_SEMITONS[novo_idx] + complemento
     return acorde
+
+def processar_e_transpor_por_coordenadas(page, rect, semitons):
+    # Obtém todas as palavras com suas coordenadas: (x0, y0, x1, y1, "palavra", block_no, line_no, word_no)
+    words = page.get_text("words", clip=rect)
+    if not words:
+        return ""
+        
+    # Agrupa as palavras por linhas usando aproximação de coordenada Y (tolerância de 3 pixels)
+    linhas_dict = {}
+    for w in words:
+        y0 = round(w[1] / 3) * 3  # Agrupa Ys muito próximos na mesma linha
+        if y0 not in linhas_dict:
+            linhas_dict[y0] = []
+        linhas_dict[y0].append(w)
+        
+    padrao_acorde = r'^([A-G][b#]?(?:m|maj|min|7|9|11|13|sus|4|dim|aug|add|6)*(?:/[A-G][b#]?)?)$'
+    linhas_ordenadas = sorted(linhas_dict.keys())
+    texto_final = []
+    
+    # Fatores para converter coordenadas X em quantidade de espaços na fonte monoespaçada
+    x_min = rect.x0
+    largura_caractere = 4.8  # Ajuste fino da largura média do caractere impresso
+    
+    for y in linhas_ordenadas:
+        palavras_da_linha = sorted(linhas_dict[y], key=lambda x: x[0])
+        linha_texto = ""
+        ultimo_x1 = x_min
+        
+        # Ignora linhas de cabeçalho distorcidas (como o título recortado erroneamente)
+        texto_completo_linha = " ".join([w[4] for w in palavras_da_linha])
+        if "GLÓRIA A VÓS" in texto_completo_linha.upper() or re.search(r'C#ÍC#LIB', texto_completo_linha):
+            continue
+            
+        for w in palavras_da_linha:
+            x0, _, x1, _, palavra = w[0], w[1], w[2], w[3], w[4]
+            
+            # Calcula quantos espaços existem antes da palavra atual baseado no X
+            espacos_necessarios = int((x0 - ultimo_x1) / largura_caractere)
+            if espacos_necessarios > 0:
+                linha_texto += " " * espacos_necessarios
+            elif len(linha_texto) > 0 and not linha_texto.endswith(" "):
+                linha_texto += " "
+                
+            # Se for linha de cifra, faz a transposição individual da palavra
+            if re.match(padrao_acorde, palavra):
+                palavra = transpor_acorde(palavra, semitons)
+                
+            linha_texto += palavra
+            ultimo_x1 = x0 + (len(palavra) * largura_caractere)
+            
+        texto_final.append(linha_texto)
+        
+    return "\n".join(texto_final)
 
 def transpor_texto_completo(texto_bloco, semitons):
     if semitons == 0:
