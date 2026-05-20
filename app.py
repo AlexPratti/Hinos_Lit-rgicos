@@ -108,12 +108,10 @@ def transpor_acorde(acorde, semitons):
     return acorde
 
 def processar_e_transpor_por_coordenadas(page, rect, semitons, titulo_hino_selecionado):
-    # Obtém todas as palavras com suas coordenadas exatas
     words = page.get_text("words", clip=rect)
     if not words:
         return ""
         
-    # Agrupa as palavras por linhas aproximadas usando a coordenada Y (tolerância de 5 pixels)
     linhas_dict = {}
     for w in words:
         y0 = w[1]
@@ -123,15 +121,13 @@ def processar_e_transpor_por_coordenadas(page, rect, semitons, titulo_hino_selec
                 linhas_dict[y_chave].append(w)
                 encontrado = True
                 break
-        if not encontrar_chave:
-            if not encontrado:
-                linhas_dict[y0] = [w]
+        if not encontrado:
+            linhas_dict[y0] = [w]
             
     padrao_acorde_estrito = r'^([A-G][b#]?(?:m|maj|min|7|9|11|13|sus|4|dim|aug|add|6)*(?:/[A-G][b#]?)?)$'
     linhas_ordenadas = sorted(linhas_dict.keys())
     texto_final = []
     
-    # 5.6 é a largura ideal padrão para a fonte monoespaçada do st.code no Streamlit
     largura_caractere = 5.6  
     x_min = rect.x0
     
@@ -139,8 +135,42 @@ def processar_e_transpor_por_coordenadas(page, rect, semitons, titulo_hino_selec
         palavras_da_linha = sorted(linhas_dict[y], key=lambda x: x[0])
         total_palavras = len(palavras_da_linha)
         
-        # Junta o texto cru da linha para validação de segurança
         texto_completo_linha = " ".join([w[4] for w in palavras_da_linha]).strip()
+        
+        if (titulo_hino_selecionado in texto_completo_linha or 
+            re.match(r'^\d+\.\s+[A-ZÁÉÍÓÚÂÊÔÇ\s,!\-]+$', texto_completo_linha)):
+            texto_final.append(texto_completo_linha)
+            continue
+            
+        chords_count = 0
+        for w in palavras_da_linha:
+            if re.match(padrao_acorde_estrito, w[4].strip()):
+                chords_count += 1
+                
+        eh_linha_cifra = (chords_count / total_palavras >= 0.80) if total_palavras > 0 else False
+        
+        linha_texto = ""
+        ultimo_x1 = x_min
+        
+        for w in palavras_da_linha:
+            x0, y0, x1, y1, palavra = w[0], w[1], w[2], w[3], w[4]
+            
+            espacos_necessarios = int((x0 - ultimo_x1) / largura_caractere)
+            if espacos_necessarios > 0:
+                linha_texto += " " * espacos_necessarios
+            elif len(linha_texto) > 0 and not linha_texto.endswith(" "):
+                linha_texto += " "
+            
+            if eh_linha_cifra and re.match(padrao_acorde_estrito, palavra.strip()):
+                palavra = transpor_acorde(palavra.strip(), semitons)
+                
+            linha_texto += palavra
+            ultimo_x1 = x0 + (len(palavra) * largura_caractere)
+            
+        texto_final.append(linha_texto)
+        
+    return "\n".join(texto_final)
+
         
         # --- PROTEÇÃO DO TÍTULO ---
         # Se for o título selecionado ou o padrão "Número. TEXTO MAIÚSCULO"
