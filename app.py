@@ -150,10 +150,10 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                                 y_fim = b[1]
                                 break
                     
-                    # Se não for a aba de cifras, renderiza e exibe o modelo original idêntico ao seu código antigo
+                    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=fitz.Rect(0, max(0, y_ini-15), page.rect.width, y_fim))
+                    st.divider()
+                    
                     if key_suffix != "cifras":
-                        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=fitz.Rect(0, max(0, y_ini-15), page.rect.width, y_fim))
-                        st.divider()
                         st.caption("### 📋 Modelo Original")
                         st.image(pix.tobytes("png"), use_container_width=True)
                     else:
@@ -173,46 +173,68 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                         retangulo_hino = fitz.Rect(0, max(0, y_ini-15), page.rect.width, y_fim)
                         
                         if deslocamento_semitons == 0:
-                            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=retangulo_hino)
                             st.caption("### 📋 Modelo Original")
                             st.image(pix.tobytes("png"), use_container_width=True)
                         else:
-                            # MODIFICAÇÃO VETORIAL DIRETA NA CAMADA DO PDF
                             words = page.get_text("words", clip=retangulo_hino)
                             padrao_acorde_estrito = r'^([A-G][b#]?(?:m|maj|min|7|9|11|13|sus|4|dim|aug|add|6)*(?:/[A-G][b#]?)?)$'
-                            
-                            # Define uma linha de corte rigorosa para não tocar no título do hino
                             limite_y_titulo = y_ini + 25 
                             
+                            # --- NOVO SISTEMA DE FILTRAGEM POR CONTEXTO DE LINHA ---
+                            # Agrupa palavras por proximidade vertical (Y) para analisar a linha inteira antes de transpor
+                            linhas_dict = {}
                             for w in words:
-                                x0, y0, x1, y1, palavra = w[0], w[1], w[2], w[3], w[4].strip()
-                                
-                                # Protege o título do hino e as categorias alvo
-                                if y0 < limite_y_titulo or re.match(r'^\d+\.', palavra) or palavra.upper() in CATEGORIAS_ALVO:
+                                y0 = w[1]
+                                linha_encontrada = False
+                                for y_chave in list(linhas_dict.keys()):
+                                    if abs(y_chave - y0) < 5:
+                                        linhas_dict[y_chave].append(w)
+                                        linha_encontrada = True
+                                        break
+                                if not linha_encontrada:
+                                    linhas_dict[y0] = [w]
+                            
+                            cifras_para_inserir = []
+                            
+                            for y_linha, palavras_linha in linhas_dict.items():
+                                total_palavras = len(palavras_linha)
+                                if total_palavras == 0:
                                     continue
                                     
-                                if re.match(padrao_acorde_estrito, palavra):
-                                    # Calcula o novo acorde
-                                    nova_cifra = transpor_acorde(palavra, deslocamento_semitons)
-                                    
-                                    # Cria o retângulo exato onde a cifra antiga reside
-                                    rect_word = fitz.Rect(x0, y0, x1, y1)
-                                    
-                                    # Aplica uma Redação (Redact) do PyMuPDF: apaga o conteúdo vetorial original
-                                    page.add_redact_annot(rect_word, fill=(1, 1, 1)) 
-                                    page.apply_redactions()
-                                    
-                                    # Insere o novo texto exatamente no mesmo ponto inicial geométrico,
-                                    # herdando o comportamento de alinhamento nativo do documento
-                                    page.insert_text(fitz.Point(x0, y1 - 1), nova_cifra, fontsize=11, color=(0, 0, 0))
+                                # Conta quantas palavras nesta linha específica se parecem com acordes
+                                chords_count = sum(1 for w in palavras_linha if re.match(padrao_acorde_estrito, w[4].strip()))
+                                
+                                # REGRA DE SEGURANÇA: A linha só é considerada de cifra se pelo menos 75% dela for acorde.
+                                # Se houver muito texto comum (letras em minúsculo), ela é ignorada para evitar falsos positivos como o "e".
+                                eh_linha_de_cifra = (chords_count / total_palavras >= 0.75)
+                                
+                                if eh_linha_de_cifra:
+                                    for w in palavras_linha:
+                                        x0, y0, x1, y1, palavra = w[0], w[1], w[2], w[3], w[4].strip()
+                                        
+                                        if y0 < limite_y_titulo or re.match(r'^\d+\.', palavra) or palavra.upper() in CATEGORIAS_ALVO:
+                                            continue
+                                            
+                                        if re.match(padrao_acorde_estrito, palavra):
+                                            nova_cifra = transpor_acorde(palavra, deslocamento_semitons)
+                                            rect_word = fitz.Rect(x0, y0, x1, y1)
+                                            page.add_redact_annot(rect_word, fill=(1, 1, 1))
+                                            cifras_para_inserir.append({"ponto": fitz.Point(x0, y1 - 1), "texto": nova_cifra})
                             
-                            # Renderiza a imagem final diretamente do PDF modificado nativamente
+                            # Aplica as redações em bloco
+                            page.apply_redactions()
+                            
+                            # Escreve as novas cifras apenas nas linhas validadas
+                            for cifra in cifras_para_inserir:
+                                page.insert_text(cifra["ponto"], cifra["texto"], fontsize=11, color=(0, 0, 0))
+                            
                             pix_transposto = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=retangulo_hino)
                             st.caption("### 🎵 Cifras Transpostas (Modo Vetorial Nativo)")
                             st.image(pix_transposto.tobytes("png"), use_container_width=True)
                             
                     doc.close()
     except Exception as e: st.error(f"Erro: {e}")
+
 
 with tab_cifras: render_hino_interface("hinarios", "hinario_atual.pdf", "hinos_categorias", "hinos_conteudos", "cifras")
 with tab_letras: render_hino_interface("letras", "hinario_letras.pdf", "hinos_categorias_letras", "hinos_conteudos_letras", "letras")
