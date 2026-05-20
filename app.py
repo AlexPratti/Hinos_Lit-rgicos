@@ -268,12 +268,6 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                         st.divider()
                         st.subheader("🔄 Transposição de Tom")
                         
-                        # Extrai o texto cru estruturado que está dentro da mesma coordenada de corte da imagem
-                        retangulo_hino = fitz.Rect(0, max(0, y_ini-15), page.rect.width, y_fim)
-                        texto_cru_hino = page.get_text("text", clip=retangulo_hino)
-                        # Passamos sel_hino como o quarto argumento para proteger o título de distorções
-                        texto_final_transposto = processar_e_transpor_por_coordenadas(page, retangulo_hino, deslocamento_semitons, sel_hino)
-
                         opcoes_tons = {
                             "Original": 0, "Aumentar ½ Tom (+1)": 1, "Aumentar 1 Tom (+2)": 2, "Aumentar 1½ Tom (+3)": 3,
                             "Aumentar 2 Tons (+4)": 4, "Aumentar 2½ Tons (+5)": 5, "Aumentar 3 Tons (+6)": 6,
@@ -284,13 +278,17 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                         tom_selecionado = st.selectbox("Selecione o novo tom para readequar as cifras:", list(opcoes_tons.keys()), key="seletor_tom")
                         deslocamento_semitons = opcoes_tons[tom_selecionado]
                         
-                        # Processa e altera apenas as linhas musicais mantendo o alinhamento de texto fixo
-                        texto_final_transposto = transpor_texto_completo(texto_cru_hino, deslocamento_semitons)
+                        # Retângulo limite baseado na detecção original do PyMuPDF
+                        retangulo_hino = fitz.Rect(0, max(0, y_ini-15), page.rect.width, y_fim)
+                        
+                        # Processa de forma estruturada baseada no posicionamento X e Y espacial
+                        texto_final_transposto = processar_e_transpor_por_coordenadas(page, retangulo_hino, deslocamento_semitons, sel_hino)
                         
                         st.caption("### 🎵 Cifras Reajustadas")
-                        st.code(texto_final_transposto, language="text")
+                        st.code(texto_final_transposto, language="text")    
                         
                     doc.close()
+                    
     except Exception as e: st.error(f"Erro: {e}")
 
 with tab_cifras: render_hino_interface("hinarios", "hinario_atual.pdf", "hinos_categorias", "hinos_conteudos", "cifras")
