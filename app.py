@@ -153,7 +153,6 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=fitz.Rect(0, max(0, y_ini-15), page.rect.width, y_fim))
                     st.divider()
                     
-                    # Se não for a aba de cifras, mantém o comportamento de imagem padrão puro
                     if key_suffix != "cifras":
                         st.caption("### 📋 Modelo Original")
                         st.image(pix.tobytes("png"), use_container_width=True)
@@ -184,8 +183,12 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                             words = page.get_text("words", clip=retangulo_hino)
                             padrao_acorde_estrito = r'^([A-G][b#]?(?:m|maj|min|7|9|11|13|sus|4|dim|aug|add|6)*(?:/[A-G][b#]?)?)$'
                             
+                            # SOLUÇÃO DE FONTE ESTÁVEL PARA O SERVER ONLINE
                             try:
-                                fonte_cifra = ImageFont.truetype("DejaVuSans-Bold.ttf", 22)
+                                import urllib.request
+                                url_fonte = "https://github.com"
+                                fonte_bytes = urllib.request.urlopen(url_fonte).read()
+                                fonte_cifra = ImageFont.truetype(io.BytesIO(fonte_bytes), 23)
                             except:
                                 try:
                                     fonte_cifra = ImageFont.truetype("arialbd.ttf", 22)
@@ -204,12 +207,14 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                                     img_x1 = (x1 - retangulo_hino.x0) * fator_escala
                                     img_y1 = (y1 - retangulo_hino.y0) * fator_escala
                                     
-                                    # Pinta um retângulo branco em cima da cifra antiga para apagá-la
-                                    draw.rectangle([img_x0 - 2, img_y0 - 2, img_x1 + 2, img_y1 + 2], fill="white")
+                                    # Limpa a região antiga expandindo sutilmente para os lados (margem segura)
+                                    draw.rectangle([img_x0 - 4, img_y0 - 2, img_x1 + 4, img_y1 + 2], fill="white")
                                     
-                                    # Gera e escreve o novo acorde transposto precisamente por cima
+                                    # Gera e centraliza o novo acorde transposto precisamente por cima
                                     nova_cifra = transpor_acorde(palavra, deslocamento_semitons)
-                                    draw.text((img_x0, img_y0 - 3), nova_cifra, fill="black", font=fonte_cifra)
+                                    
+                                    # Compensação milimétrica de Y para alinhar com a base das notas originais
+                                    draw.text((img_x0, img_y0 - 2), nova_cifra, fill="black", font=fonte_cifra)
                             
                             buffer_imagem = io.BytesIO()
                             imagem_editavel.save(buffer_imagem, format="PNG")
