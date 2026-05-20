@@ -112,6 +112,7 @@ def processar_e_transpor_por_coordenadas(page, rect, semitons, titulo_hino_selec
     if not words:
         return ""
         
+    # 1. Agrupa as palavras por linhas geométricas (tolerância de 5 pixels verticais)
     linhas_dict = {}
     for w in words:
         y0 = w[1]
@@ -126,50 +127,99 @@ def processar_e_transpor_por_coordenadas(page, rect, semitons, titulo_hino_selec
             
     padrao_acorde_estrito = r'^([A-G][b#]?(?:m|maj|min|7|9|11|13|sus|4|dim|aug|add|6)*(?:/[A-G][b#]?)?)$'
     linhas_ordenadas = sorted(linhas_dict.keys())
-    texto_final = []
     
-    largura_caractere = 5.6  
-    x_min = rect.x0
-    
+    # 2. Estrutura as linhas identificando o tipo (Cifra, Letra ou Título)
+    linhas_estruturadas = []
     for y in linhas_ordenadas:
         palavras_da_linha = sorted(linhas_dict[y], key=lambda x: x[0])
-        total_palavras = len(palavras_da_linha)
+        texto_linha = " ".join([w[4] for w in palavras_da_linha]).strip()
         
-        texto_completo_linha = " ".join([w[4] for w in palavras_da_linha]).strip()
-        
-        if (titulo_hino_selecionado in texto_completo_linha or 
-            re.match(r'^\d+\.\s+[A-ZÁÉÍÓÚÂÊÔÇ\s,!\-]+$', texto_completo_linha)):
-            texto_final.append(texto_completo_linha)
+        # Ignora/protege títulos ou cabeçalhos
+        if (titulo_hino_selecionado in texto_linha or 
+            re.match(r'^\d+\.\s+[A-ZÁÉÍÓÚÂÊÔÇ\s,!\-]+$', texto_linha)):
+            linhas_estruturadas.append({"tipo": "titulo", "texto": texto_linha, "palavras": palavras_da_linha})
             continue
             
-        chords_count = 0
-        for w in palavras_da_linha:
-            if re.match(padrao_acorde_estrito, w[4].strip()):
-                chords_count += 1
+        total_p = len(palavras_da_linha)
+        chords_count = sum(1 for w in palavras_da_linha if re.match(padrao_acorde_estrito, w[4].strip()))
+        eh_cifra = (chords_count / total_p >= 0.75) if total_p > 0 else False
+        
+        linhas_estruturadas.append({
+            "tipo": "cifra" if eh_cifra else "letra",
+            "texto": texto_linha,
+            "palavras": palavras_da_linha
+        })
+
+    # 3. Reconstrói o hino aplicando o alinhamento relativo por caractere
+    texto_final = []
+    
+    for idx, bloco in enumerate(linhas_estruturadas):
+        if bloco["tipo"] == "titulo":
+            texto_final.append(bloco["texto"])
+            continue
+            
+        if bloco["tipo"] == "letra":
+            # Se for linha de texto comum, apenas adicionamos ela limpa
+            texto_final.append(bloco["texto"])
+            continue
+            
+        if bloco["tipo"] == "cifra":
+            # Encontra a linha de letra correspondente logo abaixo para servir de régua métrica
+            proxima_letra = None
+            for posterior in linhas_estruturadas[idx+1:]:
+                if posterior["tipo"] == "letra":
+                    proxima_letra = posterior
+                    break
+            
+            if not proxima_letra:
+                # Caso não exista linha de texto abaixo (fim do hino), monta pelo método antigo simplificado
+                linha_cifra_avulsa = ""
+                ultimo_x = rect.x0
+                for w in bloco["palavras"]:
+                    espacos = int((w[0] - ultimo_x) / 5.6)
+                    linha_cifra_avulsa += (" " * max(1, espacos)) + transpor_acorde(w[4].strip(), semitons)
+                    ultimo_x = w[2]
+                texto_final.append(linha_cifra_avulsa)
+                continue
                 
-        eh_linha_cifra = (chords_count / total_palavras >= 0.80) if total_palavras > 0 else False
-        
-        linha_texto = ""
-        ultimo_x1 = x_min
-        
-        for w in palavras_da_linha:
-            x0, y0, x1, y1, palavra = w[0], w[1], w[2], w[3], w[4]
+            # Mapeamento Geométrico Inteligente baseado na linha de texto de baixo
+            palavras_texto = proxima_letra["palavras"]
+            x_inicio_texto = palavras_texto[0][0]
+            x_fim_texto = palavras_texto[-1][2]
+            largura_total_texto_pdf = max(1, x_fim_texto - x_inicio_texto)
+            num_caracteres_texto = len(proxima_letra["texto"])
             
-            espacos_necessarios = int((x0 - ultimo_x1) / largura_caractere)
-            if espacos_necessarios > 0:
-                linha_texto += " " * espacos_necessarios
-            elif len(linha_texto) > 0 and not linha_texto.endswith(" "):
-                linha_texto += " "
+            # Fator de conversão: quantos pixels do PDF equivalem a 1 caractere de texto
+            pixels_por_caractere = largura_total_texto_pdf / num_caracteres_texto
             
-            if eh_linha_cifra and re.match(padrao_acorde_estrito, palavra.strip()):
-                palavra = transpor_acorde(palavra.strip(), semitons)
+            linha_cifra_construida = [" "] * (num_caracteres_texto + 30)
+            
+            for w in bloco["palavras"]:
+                x0_cifra = w[0]
+                acorde_transposto = transpor_acorde(w[4].strip(), semitons)
                 
-            linha_texto += palavra
-            ultimo_x1 = x0 + (len(palavra) * largura_caractere)
+                # Descobre em qual índice de caractere o acorde deve pousar
+                if x0_cifra <= x_inicio_texto:
+                    indice_caractere = 0
+                else:
+                    distancia_pixels = x0_cifra - x_inicio_texto
+                    indice_caractere = int(round(distancia_pixels / pixels_por_caractere))
+                
+                # Garante que não vai estourar o vetor à esquerda
+                indice_caractere = max(0, indice_caractere)
+                
+                # Insere os caracteres do acorde um a um no array de strings
+                for c_idx, caractere_nota in enumerate(acorde_transposto):
+                    posicao_alvo = indice_caractere + c_idx
+                    if posicao_alvo < len(linha_cifra_construida):
+                        linha_cifra_construida[posicao_alvo] = caractere_nota
             
-        texto_final.append(linha_texto)
-        
+            # Junta os caracteres ignorando posições vazias à direita
+            texto_linha_cifra = "".join(linha_cifra_construida).rstrip()
+            texto_final.append(texto_linha_cifra)
+            
     return "\n".join(texto_final)
+
 
 # --- INTERFACE ---
 tab_cifras, tab_letras, tab_up_cifras, tab_up_letras, tab_util = st.tabs([
