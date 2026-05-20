@@ -116,7 +116,7 @@ def processar_e_transpor_por_coordenadas(page, rect, semitons, titulo_hino_selec
     for w in words:
         y0 = w[1]
         encontrado = False
-        for y_chave in linhas_dict.keys():
+        for y_chave in list(linhas_dict.keys()):
             if abs(y_chave - y0) < 5:
                 linhas_dict[y_chave].append(w)
                 encontrado = True
@@ -171,80 +171,6 @@ def processar_e_transpor_por_coordenadas(page, rect, semitons, titulo_hino_selec
         
     return "\n".join(texto_final)
 
-        
-        # --- PROTEÇÃO DO TÍTULO ---
-        # Se for o título selecionado ou o padrão "Número. TEXTO MAIÚSCULO"
-        if (titulo_hino_selecionado in texto_completo_linha or 
-            re.match(r'^\d+\.\s+[A-ZÁÉÍÓÚÂÊÔÇ\s,!\-]+$', texto_completo_linha)):
-            # Adiciona o título limpo e pula para a próxima linha sem bagunçar as coordenadas
-            texto_final.append(texto_completo_linha)
-            continue
-            
-        # Conta quantas palavras nessa linha específica correspondem a cifras válidas
-        chords_count = 0
-        for w in palavras_da_linha:
-            if re.match(padrao_acorde_estrito, w[4].strip()):
-                chords_count += 1
-                
-        # Uma linha só é de cifra se a imensa maioria dos elementos forem acordes
-        eh_linha_cifra = (chords_count / total_palavras >= 0.80) if total_palavras > 0 else False
-        
-        linha_texto = ""
-        ultimo_x1 = x_min
-        
-        for w in palavras_da_linha:
-            x0, y0, x1, y1, palavra = w[0], w[1], w[2], w[3], w[4]
-            
-            # Calcula e insere os espaços em branco necessários para manter o alinhamento original
-            espacos_necessarios = int((x0 - ultimo_x1) / largura_caractere)
-            if espacos_necessarios > 0:
-                linha_texto += " " * espacos_necessarios
-            elif len(linha_texto) > 0 and not linha_texto.endswith(" "):
-                linha_texto += " "
-            
-            # TRANSPOSIÇÃO SELETIVA
-            if eh_linha_cifra and re.match(padrao_acorde_estrito, palavra.strip()):
-                palavra = transpor_acorde(palavra.strip(), semitons)
-                
-            linha_texto += palavra
-            # Atualiza o rastreamento horizontal baseado no comprimento real do texto projetado
-            ultimo_x1 = x0 + (len(palavra) * largura_caractere)
-            
-        texto_final.append(linha_texto)
-        
-    return "\n".join(texto_final)
-
-
-def transpor_texto_completo(texto_bloco, semitons):
-    if semitons == 0:
-        return texto_bloco
-    linhas = texto_bloco.split('\n')
-    novas_linhas = []
-    padrao_acorde = r'([A-G][b#]?(?:m|maj|min|7|9|11|13|sus|4|dim|aug|add|6)*(?:/[A-G][b#]?)?)'
-    
-    for linha in linhas:
-        acordes_na_linha = re.findall(padrao_acorde, linha)
-        letras_minusculas = len(re.findall(r'[a-z]', linha))
-        
-        # Identifica se a linha corrente do bloco processado é prioritariamente uma linha de cifra
-        if len(acordes_na_linha) > 0 and (letras_minusculas < 4 or len(acordes_na_linha) / max(1, len(linha.split())) > 0.4):
-            nova_linha = ""
-            i = 0
-            while i < len(linha):
-                match = re.match(padrao_acorde, linha[i:])
-                if match:
-                    acorde_original = match.group(1)
-                    acorde_transposto = transpor_acorde(acorde_original, semitons)
-                    nova_linha += acorde_transposto
-                    i += len(acorde_original)
-                else:
-                    nova_linha += linha[i]
-                    i += 1
-            novas_linhas.append(nova_linha)
-        else:
-            novas_linhas.append(linha)
-    return "\n".join(novas_linhas)
-
 # --- INTERFACE ---
 tab_cifras, tab_letras, tab_up_cifras, tab_up_letras, tab_util = st.tabs([
     "🎸 Hinos com Cifras", "📖 Hinos (Letras)", "⚙️ Upload Cifras", "⚙️ Upload Letras", "🛠️ Limpar Cifras"
@@ -285,15 +211,14 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                         if b[1] > y_ini + 10:
                             txt_block = b[4].strip()
                             if re.match(r'^\d+\.', txt_block) or txt_block.upper() in CATEGORIAS_ALVO:
-                                y_fim = b[1]; break
+                                y_fim = b[1]
+                                break
                     
-                    # RENDERIZAÇÃO DA IMAGEM MODELO ORIGINAL (Mantido exatamente como no seu código original)
                     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=fitz.Rect(0, max(0, y_ini-15), page.rect.width, y_fim))
                     st.divider()
                     st.caption("### 📋 Modelo Original")
                     st.image(pix.tobytes("png"), use_container_width=True)
                     
-                    # NOVA FUNCIONALIDADE: ADICIONADA SELETOR DE MUDANÇA DE CIFRAS (Apenas na aba de Cifras)
                     if key_suffix == "cifras":
                         st.divider()
                         st.subheader("🔄 Transposição de Tom")
@@ -308,17 +233,13 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                         tom_selecionado = st.selectbox("Selecione o novo tom para readequar as cifras:", list(opcoes_tons.keys()), key="seletor_tom")
                         deslocamento_semitons = opcoes_tons[tom_selecionado]
                         
-                        # Retângulo limite baseado na detecção original do PyMuPDF
                         retangulo_hino = fitz.Rect(0, max(0, y_ini-15), page.rect.width, y_fim)
-                        
-                        # Processa de forma estruturada baseada no posicionamento X e Y espacial
                         texto_final_transposto = processar_e_transpor_por_coordenadas(page, retangulo_hino, deslocamento_semitons, sel_hino)
                         
                         st.caption("### 🎵 Cifras Reajustadas")
-                        st.code(texto_final_transposto, language="text")    
+                        st.code(texto_final_transposto, language="text")
                         
                     doc.close()
-                    
     except Exception as e: st.error(f"Erro: {e}")
 
 with tab_cifras: render_hino_interface("hinarios", "hinario_atual.pdf", "hinos_categorias", "hinos_conteudos", "cifras")
