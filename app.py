@@ -5,7 +5,6 @@ from supabase import create_client
 import pandas as pd
 import io
 from docx import Document 
-from PIL import Image, ImageDraw, ImageFont
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Hinário Litúrgico", layout="wide")
@@ -91,7 +90,7 @@ def transpor_acorde(acorde, semitons):
         return acorde
     if '/' in acorde:
         partes = acorde.split('/')
-        return f"{transpor_acorde(partes, semitons)}/{transpor_acorde(partes, semitons)}"
+        return f"{transpor_acorde(partes[0], semitons)}/{transpor_acorde(partes[1], semitons)}"
         
     match = re.match(r'^([A-G][#b]?)(.*)$', acorde)
     if not match:
@@ -107,6 +106,7 @@ def transpor_acorde(acorde, semitons):
         novo_idx = (idx_atual + semitons) % 12
         return NOTAS_SEMITONS[novo_idx] + complemento
     return acorde
+
 # --- INTERFACE ---
 tab_cifras, tab_letras, tab_up_cifras, tab_up_letras, tab_util = st.tabs([
     "🎸 Hinos com Cifras", "📖 Hinos (Letras)", "⚙️ Upload Cifras", "⚙️ Upload Letras", "🛠️ Limpar Cifras"
@@ -150,13 +150,14 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                                 y_fim = b[1]
                                 break
                     
-                    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=fitz.Rect(0, max(0, y_ini-15), page.rect.width, y_fim))
-                    st.divider()
-                    
+                    # Se não for a aba de cifras, renderiza e exibe o modelo original idêntico ao seu código antigo
                     if key_suffix != "cifras":
+                        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=fitz.Rect(0, max(0, y_ini-15), page.rect.width, y_fim))
+                        st.divider()
                         st.caption("### 📋 Modelo Original")
                         st.image(pix.tobytes("png"), use_container_width=True)
                     else:
+                        st.divider()
                         st.subheader("🔄 Transposição de Tom")
                         
                         opcoes_tons = {
@@ -172,55 +173,43 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                         retangulo_hino = fitz.Rect(0, max(0, y_ini-15), page.rect.width, y_fim)
                         
                         if deslocamento_semitons == 0:
+                            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=retangulo_hino)
                             st.caption("### 📋 Modelo Original")
                             st.image(pix.tobytes("png"), use_container_width=True)
                         else:
-                            img_data = pix.tobytes("png")
-                            imagem_editavel = Image.open(io.BytesIO(img_data))
-                            draw = ImageDraw.Draw(imagem_editavel)
-                            
-                            fator_escala = 2
+                            # MODIFICAÇÃO VETORIAL DIRETA NA CAMADA DO PDF
                             words = page.get_text("words", clip=retangulo_hino)
                             padrao_acorde_estrito = r'^([A-G][b#]?(?:m|maj|min|7|9|11|13|sus|4|dim|aug|add|6)*(?:/[A-G][b#]?)?)$'
                             
-                            # SOLUÇÃO DE FONTE ESTÁVEL PARA O SERVER ONLINE
-                            try:
-                                import urllib.request
-                                url_fonte = "https://github.com"
-                                fonte_bytes = urllib.request.urlopen(url_fonte).read()
-                                fonte_cifra = ImageFont.truetype(io.BytesIO(fonte_bytes), 23)
-                            except:
-                                try:
-                                    fonte_cifra = ImageFont.truetype("arialbd.ttf", 22)
-                                except:
-                                    fonte_cifra = ImageFont.load_default()
+                            # Define uma linha de corte rigorosa para não tocar no título do hino
+                            limite_y_titulo = y_ini + 25 
                             
                             for w in words:
                                 x0, y0, x1, y1, palavra = w[0], w[1], w[2], w[3], w[4].strip()
                                 
-                                if re.match(r'^\d+\.', palavra) or palavra.upper() in CATEGORIAS_ALVO:
+                                # Protege o título do hino e as categorias alvo
+                                if y0 < limite_y_titulo or re.match(r'^\d+\.', palavra) or palavra.upper() in CATEGORIAS_ALVO:
                                     continue
                                     
                                 if re.match(padrao_acorde_estrito, palavra):
-                                    img_x0 = (x0 - retangulo_hino.x0) * fator_escala
-                                    img_y0 = (y0 - retangulo_hino.y0) * fator_escala
-                                    img_x1 = (x1 - retangulo_hino.x0) * fator_escala
-                                    img_y1 = (y1 - retangulo_hino.y0) * fator_escala
-                                    
-                                    # Limpa a região antiga expandindo sutilmente para os lados (margem segura)
-                                    draw.rectangle([img_x0 - 4, img_y0 - 2, img_x1 + 4, img_y1 + 2], fill="white")
-                                    
-                                    # Gera e centraliza o novo acorde transposto precisamente por cima
+                                    # Calcula o novo acorde
                                     nova_cifra = transpor_acorde(palavra, deslocamento_semitons)
                                     
-                                    # Compensação milimétrica de Y para alinhar com a base das notas originais
-                                    draw.text((img_x0, img_y0 - 2), nova_cifra, fill="black", font=fonte_cifra)
+                                    # Cria o retângulo exato onde a cifra antiga reside
+                                    rect_word = fitz.Rect(x0, y0, x1, y1)
+                                    
+                                    # Aplica uma Redação (Redact) do PyMuPDF: apaga o conteúdo vetorial original
+                                    page.add_redact_annot(rect_word, fill=(1, 1, 1)) 
+                                    page.apply_redactions()
+                                    
+                                    # Insere o novo texto exatamente no mesmo ponto inicial geométrico,
+                                    # herdando o comportamento de alinhamento nativo do documento
+                                    page.insert_text(fitz.Point(x0, y1 - 1), nova_cifra, fontsize=11, color=(0, 0, 0))
                             
-                            buffer_imagem = io.BytesIO()
-                            imagem_editavel.save(buffer_imagem, format="PNG")
-                            
-                            st.caption("### 🎵 Cifras Transpostas (Modo Imagem Real)")
-                            st.image(buffer_imagem.getvalue(), use_container_width=True)
+                            # Renderiza a imagem final diretamente do PDF modificado nativamente
+                            pix_transposto = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=retangulo_hino)
+                            st.caption("### 🎵 Cifras Transpostas (Modo Vetorial Nativo)")
+                            st.image(pix_transposto.tobytes("png"), use_container_width=True)
                             
                     doc.close()
     except Exception as e: st.error(f"Erro: {e}")
@@ -252,4 +241,4 @@ with tab_util:
     if arquivo_docx:
         if st.button("✨ Limpar Documento"):
             resultado_bytes = limpar_cifras_docx(arquivo_docx)
-            st.download_button(label="📥 Baixar DOCX Sem Cifras", data=resultado_bytes, file_name="LITURGICOS_SEM_CIFRAS.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            st.download_button(label="📥 Baixar DOCX Sem Cifras", data=resultado_bytes, file_name="LITURGICES_SEM_CIFRAS.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
