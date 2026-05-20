@@ -150,10 +150,9 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                                 y_fim = b[1]
                                 break
                     
-                    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=fitz.Rect(0, max(0, y_ini-15), page.rect.width, y_fim))
-                    st.divider()
-                    
                     if key_suffix != "cifras":
+                        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=fitz.Rect(0, max(0, y_ini-15), page.rect.width, y_fim))
+                        st.divider()
                         st.caption("### 📋 Modelo Original")
                         st.image(pix.tobytes("png"), use_container_width=True)
                     else:
@@ -167,19 +166,41 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                             "Diminuir 2 Tons (-4)": -4, "Diminuir 2½ Tons (-5)": -5, "Diminuir 3 Tons (-6)": -6
                         }
                         
-                        tom_selecionado = st.selectbox("Selecione o novo tom para readequar as cifras:", list(opcoes_tons.keys()), key="seletor_tom")
+                        # --- MONITORAMENTO DE MUDANÇA DE HINO (RESET AUTOMÁTICO) ---
+                        # Se o hino atual na tela for diferente do hino guardado no histórico do state,
+                        # mudamos o índice padrão do selectbox de volta para 0 ("Original")
+                        if "ultimo_hino_carregado" not in st.session_state:
+                            st.session_state["ultimo_hino_carregado"] = sel_hino
+                            st.session_state["indice_tom_atual"] = 0
+                            
+                        if st.session_state["ultimo_hino_carregado"] != sel_hino:
+                            st.session_state["ultimo_hino_carregado"] = sel_hino
+                            st.session_state["indice_tom_atual"] = 0
+                        
+                        # Callback para salvar a nova escolha caso o usuário altere manualmente o tom
+                        def salvar_mudanca_tom():
+                            lista_tons = list(opcoes_tons.keys())
+                            if st.session_state["seletor_tom"] in lista_tons:
+                                st.session_state["indice_tom_atual"] = lista_tons.index(st.session_state["seletor_tom"])
+
+                        tom_selecionado = st.selectbox(
+                            "Selecione o novo tom para readequar as cifras:", 
+                            list(opcoes_tons.keys()), 
+                            index=st.session_state["indice_tom_atual"],
+                            key="seletor_tom",
+                            on_change=salvar_mudanca_tom
+                        )
                         deslocamento_semitons = opcoes_tons[tom_selecionado]
                         
                         retangulo_hino = fitz.Rect(0, max(0, y_ini-15), page.rect.width, y_fim)
                         
                         if deslocamento_semitons == 0:
+                            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=retangulo_hino)
                             st.caption("### 📋 Modelo Original")
                             st.image(pix.tobytes("png"), use_container_width=True)
                         else:
                             words = page.get_text("words", clip=retangulo_hino)
                             padrao_acorde_estrito = r'^([A-G][b#]?(?:m|maj|min|7|9|11|13|sus|4|dim|aug|add|6)*(?:/[A-G][b#]?)?)$'
-                            
-                            # Cria um conjunto de palavras que fazem parte do título para comparação rápida
                             palavras_titulo = set(re.findall(r'\w+', sel_hino.upper()))
                             
                             linhas_dict = {}
@@ -208,7 +229,6 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                                     for w in palavras_linha:
                                         x0, y0, x1, y1, palavra = w[0], w[1], w[2], w[3], w[4].strip()
                                         
-                                        # FILTRO DE PROTEÇÃO POR PALAVRA E CONTEXTO (Sem limite fixo de Y)
                                         if re.match(r'^\d+\.', palavra) or palavra.upper() in CATEGORIAS_ALVO or palavra.upper() in palavras_titulo:
                                             continue
                                             
@@ -229,8 +249,6 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                             
                     doc.close()
     except Exception as e: st.error(f"Erro: {e}")
-
-
 
 with tab_cifras: render_hino_interface("hinarios", "hinario_atual.pdf", "hinos_categorias", "hinos_conteudos", "cifras")
 with tab_letras: render_hino_interface("letras", "hinario_letras.pdf", "hinos_categorias_letras", "hinos_conteudos_letras", "letras")
@@ -259,4 +277,4 @@ with tab_util:
     if arquivo_docx:
         if st.button("✨ Limpar Documento"):
             resultado_bytes = limpar_cifras_docx(arquivo_docx)
-            st.download_button(label="📥 Baixar DOCX Sem Cifras", data=resultado_bytes, file_name="LITURGICES_SEM_CIFRAS.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            st.download_button(label="📥 Baixar DOCX Sem Cifras", data=resultado_bytes, file_name="LITURGICOS_SEM_CIFRAS.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
