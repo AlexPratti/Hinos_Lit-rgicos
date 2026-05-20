@@ -18,6 +18,9 @@ except Exception as e:
 
 CATEGORIAS_ALVO = ["ORANTES", "INICIAIS E FINAIS", "PERDÃO", "GLÓRIA", "DEUS NOS FALA", "SALMO", "ACLAMAÇÃO", "OFERTÓRIO", "LOUVOR", "SANTO", "CORDEIRO", "PAZ", "COMUNHÃO", "BÍBLIA", "CRUZ", "LADAINHAS – SEQUÊNCIAS - PROCLAMAÇÕES", "MARIA", "HINOS DIVERSOS", "PRECES"]
 
+# --- LISTA DE ACORDES PARA TRANSPOSIÇÃO ---
+NOTAS_SEMITONS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+
 # --- FUNÇÕES DE PROCESSAMENTO PDF ---
 def process_pdf_fitz(file_bytes):
     data = []
@@ -53,16 +56,9 @@ def save_to_db(data, table_cat, table_cont):
 
 # --- FUNÇÃO PARA LIMPAR CIFRAS DOCX ---
 def limpar_cifras_docx(file):
-    # Abrimos o documento original para preservar estilos, margens e fontes
     doc = Document(file)
-    
-    # Padrão de cifras: Notas A-G isoladas, seguidas de m, #, 7, etc.
-    # Esta regex foca em linhas que contém padrões de acordes musicais
     padrao_cifras = r'\b([A-G][b#]?(m|maj|min|7|9|11|13|sus|4|dim|aug|add|6)*)(?=\s|$|/)\b'
-    
-    # Pegamos a lista de parágrafos
     paragraphs = doc.paragraphs
-    # Usamos uma lista de índices para deletar de trás para frente para não quebrar o loop
     indices_para_deletar = []
 
     for i, p in enumerate(paragraphs):
@@ -70,32 +66,78 @@ def limpar_cifras_docx(file):
         if not texto:
             continue
             
-        # Encontra todos os acordes na linha
         acordes = re.findall(padrao_cifras, texto)
-        # Conta letras minúsculas (geralmente presentes em letras de músicas, raras em linhas de cifras)
         letras_minusculas = len(re.findall(r'[a-z]', texto))
         
-        # CRITÉRIO DE REMOÇÃO:
-        # Se a linha tem acordes E (quase não tem letras minúsculas OU é composta majoritariamente por espaços/acordes)
         if len(acordes) > 0:
-            # Se for uma linha "limpa" de cifras (quase sem texto comum)
             if letras_minusculas < 3: 
                 indices_para_deletar.append(i)
-            # Ou se a proporção de acordes for muito alta comparada ao texto
             elif len(acordes) / len(texto.split()) > 0.5:
                 indices_para_deletar.append(i)
 
-    # Deletamos os parágrafos de cifras do objeto original
-    # A deleção no python-docx é feita removendo o elemento XML do parágrafo
     for index in sorted(indices_para_deletar, reverse=True):
         p = paragraphs[index]._element
         p.getparent().remove(p)
         p._p = p._element = None
 
-    # Salva o arquivo modificado em memória mantendo a formatação
     target = io.BytesIO()
     doc.save(target)
     return target.getvalue()
+
+# --- LÓGICA DE TRANSPOSIÇÃO DE TOM DE CIFRAS ---
+def transpor_acorde(acorde, semitons):
+    if not acorde:
+        return acorde
+    # Casos especiais de barras (ex: G/B)
+    if '/' in acorde:
+        partes = acorde.split('/')
+        return f"{transpor_acorde(partes[0], semitons)}/{transpor_acorde(partes[1], semitons)}"
+        
+    match = re.match(r'^([A-G][#b]?)(.*)$', acorde)
+    if not match:
+        return acorde
+    nota_fundamental, complemento = match.groups()
+    
+    # Padronização de bemóis para sustenidos para equivalência na lista
+    conversao_bemol = {"Db": "C#", "Eb": "D#", "Gb": "F#", "Ab": "G#", "Bb": "A#"}
+    if nota_fundamental in conversao_bemol:
+        nota_fundamental = conversao_bemol[nota_fundamental]
+        
+    if nota_fundamental in NOTAS_SEMITONS:
+        idx_atual = NOTAS_SEMITONS.index(nota_fundamental)
+        novo_idx = (idx_atual + semitons) % 12
+        return NOTAS_SEMITONS[novo_idx] + complemento
+    return acorde
+
+def transpor_texto_completo(texto_bloco, semitons):
+    if semitons == 0:
+        return texto_bloco
+    linhas = texto_bloco.split('\n')
+    novas_linhas = []
+    padrao_acorde = r'([A-G][b#]?(?:m|maj|min|7|9|11|13|sus|4|dim|aug|add|6)*(?:/[A-G][b#]?)?)'
+    
+    for linha in linhas:
+        acordes_na_linha = re.findall(padrao_acorde, linha)
+        letras_minusculas = len(re.findall(r'[a-z]', linha))
+        
+        # Identifica se a linha corrente do bloco processado é prioritariamente uma linha de cifra
+        if len(acordes_na_linha) > 0 and (letras_minusculas < 4 or len(acordes_na_linha) / max(1, len(linha.split())) > 0.4):
+            nova_linha = ""
+            i = 0
+            while i < len(linha):
+                match = re.match(padrao_acorde, linha[i:])
+                if match:
+                    acorde_original = match.group(1)
+                    acorde_transposto = transpor_acorde(acorde_original, semitons)
+                    nova_linha += acorde_transposto
+                    i += len(acorde_original)
+                else:
+                    nova_linha += linha[i]
+                    i += 1
+            novas_linhas.append(nova_linha)
+        else:
+            novas_linhas.append(linha)
+    return "\n".join(novas_linhas)
 
 # --- INTERFACE ---
 tab_cifras, tab_letras, tab_up_cifras, tab_up_letras, tab_util = st.tabs([
@@ -110,7 +152,6 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
             c1, c2 = st.columns(2)
             with c1:
                 sel_cat = st.selectbox("Categoria", df_cat['nome_nivel1'], key=f"cat_{key_suffix}")
-                # CORREÇÃO DEFINITIVA DO ERRO DE INDEXER
                 cat_id_row = df_cat[df_cat['nome_nivel1'] == sel_cat]['id'].values
                 if len(cat_id_row) > 0:
                     cat_id = int(cat_id_row[0])
@@ -140,9 +181,37 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                             if re.match(r'^\d+\.', txt_block) or txt_block.upper() in CATEGORIAS_ALVO:
                                 y_fim = b[1]; break
                     
+                    # RENDERIZAÇÃO DA IMAGEM MODELO ORIGINAL (Mantido exatamente como no seu código original)
                     pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=fitz.Rect(0, max(0, y_ini-15), page.rect.width, y_fim))
                     st.divider()
+                    st.caption("### 📋 Modelo Original")
                     st.image(pix.tobytes("png"), use_container_width=True)
+                    
+                    # NOVA FUNCIONALIDADE: ADICIONADA SELETOR DE MUDANÇA DE CIFRAS (Apenas na aba de Cifras)
+                    if key_suffix == "cifras":
+                        st.divider()
+                        st.subheader("🔄 Transposição de Tom")
+                        
+                        # Extrai o texto cru estruturado que está dentro da mesma coordenada de corte da imagem
+                        retangulo_hino = fitz.Rect(0, max(0, y_ini-15), page.rect.width, y_fim)
+                        texto_cru_hino = page.get_text("text", clip=retangulo_hino)
+                        
+                        opcoes_tons = {
+                            "Original": 0, "Aumentar ½ Tom (+1)": 1, "Aumentar 1 Tom (+2)": 2, "Aumentar 1½ Tom (+3)": 3,
+                            "Aumentar 2 Tons (+4)": 4, "Aumentar 2½ Tons (+5)": 5, "Aumentar 3 Tons (+6)": 6,
+                            "Diminuir ½ Tom (-1)": -1, "Diminuir 1 Tom (-2)": -2, "Diminuir 1½ Tom (-3)": -3,
+                            "Diminuir 2 Tons (-4)": -4, "Diminuir 2½ Tons (-5)": -5, "Diminuir 3 Tons (-6)": -6
+                        }
+                        
+                        tom_selecionado = st.selectbox("Selecione o novo tom para readequar as cifras:", list(opcoes_tons.keys()), key="seletor_tom")
+                        deslocamento_semitons = opcoes_tons[tom_selecionado]
+                        
+                        # Processa e altera apenas as linhas musicais mantendo o alinhamento de texto fixo
+                        texto_final_transposto = transpor_texto_completo(texto_cru_hino, deslocamento_semitons)
+                        
+                        st.caption("### 🎵 Cifras Reajustadas")
+                        st.code(texto_final_transposto, language="text")
+                        
                     doc.close()
     except Exception as e: st.error(f"Erro: {e}")
 
@@ -174,4 +243,3 @@ with tab_util:
         if st.button("✨ Limpar Documento"):
             resultado_bytes = limpar_cifras_docx(arquivo_docx)
             st.download_button(label="📥 Baixar DOCX Sem Cifras", data=resultado_bytes, file_name="LITURGICOS_SEM_CIFRAS.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-
