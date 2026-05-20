@@ -178,10 +178,10 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                         else:
                             words = page.get_text("words", clip=retangulo_hino)
                             padrao_acorde_estrito = r'^([A-G][b#]?(?:m|maj|min|7|9|11|13|sus|4|dim|aug|add|6)*(?:/[A-G][b#]?)?)$'
-                            limite_y_titulo = y_ini + 25 
                             
-                            # --- NOVO SISTEMA DE FILTRAGEM POR CONTEXTO DE LINHA ---
-                            # Agrupa palavras por proximidade vertical (Y) para analisar a linha inteira antes de transpor
+                            # Cria um conjunto de palavras que fazem parte do título para comparação rápida
+                            palavras_titulo = set(re.findall(r'\w+', sel_hino.upper()))
+                            
                             linhas_dict = {}
                             for w in words:
                                 y0 = w[1]
@@ -201,18 +201,15 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                                 if total_palavras == 0:
                                     continue
                                     
-                                # Conta quantas palavras nesta linha específica se parecem com acordes
                                 chords_count = sum(1 for w in palavras_linha if re.match(padrao_acorde_estrito, w[4].strip()))
-                                
-                                # REGRA DE SEGURANÇA: A linha só é considerada de cifra se pelo menos 75% dela for acorde.
-                                # Se houver muito texto comum (letras em minúsculo), ela é ignorada para evitar falsos positivos como o "e".
                                 eh_linha_de_cifra = (chords_count / total_palavras >= 0.75)
                                 
                                 if eh_linha_de_cifra:
                                     for w in palavras_linha:
                                         x0, y0, x1, y1, palavra = w[0], w[1], w[2], w[3], w[4].strip()
                                         
-                                        if y0 < limite_y_titulo or re.match(r'^\d+\.', palavra) or palavra.upper() in CATEGORIAS_ALVO:
+                                        # FILTRO DE PROTEÇÃO POR PALAVRA E CONTEXTO (Sem limite fixo de Y)
+                                        if re.match(r'^\d+\.', palavra) or palavra.upper() in CATEGORIAS_ALVO or palavra.upper() in palavras_titulo:
                                             continue
                                             
                                         if re.match(padrao_acorde_estrito, palavra):
@@ -221,10 +218,8 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                                             page.add_redact_annot(rect_word, fill=(1, 1, 1))
                                             cifras_para_inserir.append({"ponto": fitz.Point(x0, y1 - 1), "texto": nova_cifra})
                             
-                            # Aplica as redações em bloco
                             page.apply_redactions()
                             
-                            # Escreve as novas cifras apenas nas linhas validadas
                             for cifra in cifras_para_inserir:
                                 page.insert_text(cifra["ponto"], cifra["texto"], fontsize=11, color=(0, 0, 0))
                             
@@ -234,6 +229,7 @@ def render_hino_interface(bucket, file_path, table_cat, table_cont, key_suffix):
                             
                     doc.close()
     except Exception as e: st.error(f"Erro: {e}")
+
 
 
 with tab_cifras: render_hino_interface("hinarios", "hinario_atual.pdf", "hinos_categorias", "hinos_conteudos", "cifras")
