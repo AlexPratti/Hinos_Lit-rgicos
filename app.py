@@ -49,7 +49,8 @@ def save_to_db(data, table_cat, table_cont):
     for cat in CATEGORIAS_ALVO:
         res = supabase.table(table_cat).insert({"nome_nivel1": cat}).execute()
         if res.data:
-            res_data = res.data if isinstance(res.data, list) else res.data
+            # Como res.data é uma lista, pegamos o primeiro elemento [0]
+            res_data = res.data[0] if isinstance(res.data, list) else res.data
             cat_id = res_data['id']
             itens = [{"categoria_id": cat_id, "nome_nivel2": item['n2'], "texto_completo": str(item['pag'])} for item in data if item['n1'] == cat]
             if itens: supabase.table(table_cont).insert(itens).execute()
