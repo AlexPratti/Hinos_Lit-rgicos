@@ -44,16 +44,35 @@ def process_pdf_fitz(file_bytes):
         return []
 
 def save_to_db(data, table_cat, table_cont):
+    # Deleta os dados antigos
     supabase.table(table_cont).delete().neq("id", 0).execute()
     supabase.table(table_cat).delete().neq("id", 0).execute()
+    
     for cat in CATEGORIAS_ALVO:
-        res = supabase.table(table_cat).insert({"nome_nivel1": cat}).execute()
-        if res.data:
-            # Como res.data é uma lista, pegamos o primeiro elemento [0]
-            res_data = res.data[0] if isinstance(res.data, list) else res.data
-            cat_id = res_data['id']
-            itens = [{"categoria_id": cat_id, "nome_nivel2": item['n2'], "texto_completo": str(item['pag'])} for item in data if item['n1'] == cat]
-            if itens: supabase.table(table_cont).insert(itens).execute()
+        try:
+            # Forçamos o retorno dos dados inseridos usando a nova estrutura do SDK
+            res = supabase.table(table_cat).insert({"nome_nivel1": cat}).execute()
+            
+            # Garante a leitura correta do dado independente da versão da biblioteca
+            if res and hasattr(res, 'data') and res.data:
+                res_data = res.data[0] if isinstance(res.data, list) else res.data
+                cat_id = res_data['id']
+                
+                itens = [
+                    {
+                        "categoria_id": cat_id, 
+                        "nome_nivel2": item['n2'], 
+                        "texto_completo": str(item['pag'])
+                    } 
+                    for item in data if item['n1'] == cat
+                ]
+                
+                if itens: 
+                    supabase.table(table_cont).insert(itens).execute()
+        except Exception as table_err:
+            st.error(f"Erro ao inserir categoria '{cat}' na tabela '{table_cat}': {table_err}")
+            st.stop()
+
 
 # --- FUNÇÃO PARA LIMPAR CIFRAS DOCX ---
 def limpar_cifras_docx(file):
