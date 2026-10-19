@@ -243,15 +243,29 @@ with tab_up_cifras:
     n_c = st.file_uploader("PDF Cifras", type="pdf", key="f_c")
     if st.button("🚀 Atualizar Cifras") and n_c:
         b = n_c.read()
-        # --- LINHA CORRIGIDA ABAIXO ---
-        supabase.storage.from_("hinarios").upload(
-            path="hinario_atual.pdf", 
-            file=b, 
-            file_options={"upsert": "true", "content_type": "application/pdf"}
-        )
-        # ------------------------------
+        
+        # Tenta atualizar o arquivo existente. Se falhar porque não existe, faz o upload.
+        try:
+            supabase.storage.from_("hinarios").update(
+                path="hinario_atual.pdf", 
+                file=b, 
+                file_options={"content_type": "application/pdf"}
+            )
+        except Exception as storage_err:
+            # Se o arquivo não existir ou o update falhar, tenta o upload limpo
+            try:
+                supabase.storage.from_("hinarios").upload(
+                    path="hinario_atual.pdf", 
+                    file=b, 
+                    file_options={"content_type": "application/pdf"}
+                )
+            except Exception as e:
+                st.error(f"Erro crítico no Storage do Supabase: {e}")
+                st.stop()
+
         d = process_pdf_fitz(b)
         if d: save_to_db(d, "hinos_categorias", "hinos_conteudos"); st.success("OK!"); st.rerun()
+
 
 
 with tab_up_letras:
@@ -259,15 +273,28 @@ with tab_up_letras:
     n_l = st.file_uploader("PDF Letras", type="pdf", key="f_l")
     if st.button("🚀 Atualizar Letras") and n_l:
         b = n_l.read()
-        # --- LINHA CORRIGIDA ABAIXO ---
-        supabase.storage.from_("letras").upload(
-            path="hinario_letras.pdf", 
-            file=b, 
-            file_options={"upsert": "true", "content_type": "application/pdf"}
-        )
-        # ------------------------------
+        
+        # Tenta atualizar o arquivo existente. Se falhar porque não existe, faz o upload.
+        try:
+            supabase.storage.from_("letras").update(
+                path="hinario_letras.pdf", 
+                file=b, 
+                file_options={"content_type": "application/pdf"}
+            )
+        except Exception as storage_err:
+            try:
+                supabase.storage.from_("letras").upload(
+                    path="hinario_letras.pdf", 
+                    file=b, 
+                    file_options={"content_type": "application/pdf"}
+                )
+            except Exception as e:
+                st.error(f"Erro crítico no Storage do Supabase: {e}")
+                st.stop()
+
         d = process_pdf_fitz(b)
         if d: save_to_db(d, "hinos_categorias_letras", "hinos_conteudos_letras"); st.success("OK!"); st.rerun()
+
 
 
 with tab_util:
