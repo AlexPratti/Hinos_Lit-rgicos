@@ -243,18 +243,32 @@ with tab_up_cifras:
     n_c = st.file_uploader("PDF Cifras", type="pdf", key="f_c")
     if st.button("🚀 Atualizar Cifras") and n_c:
         b = n_c.read()
-        supabase.storage.from_("hinarios").upload(path="hinario_atual.pdf", file=b, file_options={"x-upsert": "true", "content-type": "application/pdf"})
+        # --- LINHA CORRIGIDA ABAIXO ---
+        supabase.storage.from_("hinarios").upload(
+            path="hinario_atual.pdf", 
+            file=b, 
+            file_options={"upsert": "true", "content_type": "application/pdf"}
+        )
+        # ------------------------------
         d = process_pdf_fitz(b)
         if d: save_to_db(d, "hinos_categorias", "hinos_conteudos"); st.success("OK!"); st.rerun()
+
 
 with tab_up_letras:
     st.subheader("Configuração Letras")
     n_l = st.file_uploader("PDF Letras", type="pdf", key="f_l")
     if st.button("🚀 Atualizar Letras") and n_l:
         b = n_l.read()
-        supabase.storage.from_("letras").upload(path="hinario_letras.pdf", file=b, file_options={"x-upsert": "true", "content-type": "application/pdf"})
+        # --- LINHA CORRIGIDA ABAIXO ---
+        supabase.storage.from_("letras").upload(
+            path="hinario_letras.pdf", 
+            file=b, 
+            file_options={"upsert": "true", "content_type": "application/pdf"}
+        )
+        # ------------------------------
         d = process_pdf_fitz(b)
         if d: save_to_db(d, "hinos_categorias_letras", "hinos_conteudos_letras"); st.success("OK!"); st.rerun()
+
 
 with tab_util:
     st.subheader("Remover Cifras de DOCX")
